@@ -1,0 +1,81 @@
+/* Dữ liệu mẫu, chép từ reference/job-pipeline.jsx. Thuần — server và UI đều import được. */
+
+export const SEED_RULES = [
+  {
+    id: "r_lang",
+    label: "Tin đăng tiếng Phần Lan",
+    field: "lang",
+    match: "fi",
+    action: "doubt",
+    enabled: true,
+    note: "Ngôn ngữ tin đăng thường phản ánh ngôn ngữ làm việc. Để Ngờ vực vì có công ty đăng song ngữ.",
+  },
+  {
+    id: "r_senior_hard",
+    label: "Vượt tầm kinh nghiệm",
+    field: "title",
+    match: "lead, principal, head of, director, staff engineer, architect, vp of, chief, manager",
+    action: "kill",
+    enabled: true,
+    note: "3.5 năm không với tới. Tắt rule này nếu muốn xem lại toàn bộ.",
+  },
+  {
+    id: "r_senior_soft",
+    label: "Senior — sát ngưỡng",
+    field: "title",
+    match: "senior",
+    action: "doubt",
+    enabled: true,
+    note: "Nhiều công ty ở Phần Lan gọi 3–5 năm là Senior. Đáng liếc qua.",
+  },
+  {
+    id: "r_notrole",
+    label: "Không phải vai trò của tao",
+    field: "title",
+    match: "sales, marketing, recruiter, talent acquisition, hr, account manager, designer, ux, customer success, support specialist, controller, accountant",
+    action: "kill",
+    enabled: true,
+    note: "",
+  },
+  {
+    id: "r_custom",
+    label: "Ngành ngoài phạm vi",
+    field: "any",
+    match: "",
+    action: "kill",
+    enabled: false,
+    note: "Để trống sẵn. Điền khi mày phát hiện mẫu lặp lại đáng loại.",
+  },
+];
+
+export const SEED_SOURCES = [
+  { id: "s1", name: "LinkedIn Jobs", url: "https://www.linkedin.com/jobs", kind: "board" },
+  { id: "s2", name: "Duunitori", url: "https://duunitori.fi", kind: "board" },
+  { id: "s3", name: "Oikotie Työpaikat", url: "https://tyopaikat.oikotie.fi", kind: "board" },
+  { id: "s4", name: "Työmarkkinatori", url: "https://tyomarkkinatori.fi", kind: "board" },
+  { id: "s5", name: "The Hub", url: "https://thehub.io/jobs/location/finland", kind: "tech" },
+  { id: "s6", name: "Work in Finland", url: "https://www.workinfinland.com", kind: "tech" },
+  { id: "s7", name: "Jobs in Helsinki", url: "https://www.jobsinhelsinki.com", kind: "tech" },
+  { id: "s8", name: "EuroTechJobs", url: "https://www.eurotechjobs.com/jobs/finland", kind: "tech" },
+  { id: "s9", name: "Wellfound", url: "https://wellfound.com/location/finland", kind: "tech" },
+  { id: "s10", name: "startup.jobs", url: "https://startup.jobs/locations/finland", kind: "tech" },
+  { id: "s11", name: "Talented (Witted)", url: "https://talented.fi", kind: "agent" },
+  { id: "s12", name: "Toughbyte", url: "https://toughbyte.com", kind: "agent" },
+  { id: "s13", name: "Finders Seekers", url: "https://findersseekers.io", kind: "agent" },
+  { id: "s14", name: "Academic Work", url: "https://www.academicwork.fi", kind: "agent" },
+  { id: "s15", name: "Barona", url: "https://barona.fi", kind: "agent" },
+];
+
+export const SEED_COMPANIES = [
+  ["Futurice", "consult"], ["Reaktor", "consult"], ["Nitor", "consult"], ["Solita", "consult"],
+  ["Siili Solutions", "consult"], ["Gofore", "consult"], ["Vincit", "consult"], ["Eficode", "consult"],
+  ["Knowit", "consult"], ["Qvik", "consult"], ["Wunder", "consult"], ["TietoEVRY", "consult"],
+  ["CGI Suomi", "consult"], ["Codemate", "consult"],
+  ["Wolt", ""], ["Supercell", ""], ["Rovio", ""], ["Unity", ""], ["Smartly.io", ""],
+  ["RELEX Solutions", ""], ["Aiven", ""], ["Oura", ""], ["Varjo", ""], ["Swappie", ""],
+  ["Supermetrics", ""], ["Hoxhunt", ""], ["IQM Quantum Computers", ""], ["M-Files", ""],
+  ["Valohai", ""], ["IPRally", ""], ["Silo AI", ""],
+  ["Nokia", ""], ["Vaisala", ""], ["KONE", ""], ["Wärtsilä", ""], ["Konecranes", ""],
+  ["OP Financial Group", ""], ["Nordea", ""], ["Elisa", ""], ["Telia Finland", ""],
+  ["S-Group", ""], ["Kesko", ""], ["Sanoma", ""], ["Yle", ""], ["VR Group", ""], ["Posti", ""],
+];
