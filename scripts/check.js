@@ -196,7 +196,8 @@ check("người sửa quyết định của luật, U: về đúng killed_by, t�
   const db = openDb(":memory:");
   const a = add(db, "Lead Developer");
   J.decide(db, a.id, "queue");
-  eq(J.undo(db).job.id, a.id, "U hoàn tác đúng tin");
+  const u = J.undo(db);
+  eq([u.job.id, u.ruleOff], [a.id, false], "U hoàn tác đúng tin; luật còn bật thì không ghi chú");
   eq(state(db, a.id), ["killed", "rule", "r_senior_hard"], "sau khi hoàn tác");
   J.toggleRule(db, "r_senior_hard");
   eq(state(db, a.id), ["new", null, null], "hồi sinh sau hoàn tác");
@@ -224,7 +225,7 @@ check("U trả về quyết định của luật đã tắt → xử lý như h�
   const a = add(db, "Senior Backend Engineer");
   J.decide(db, a.id, "maybe");
   J.toggleRule(db, "r_senior_soft"); // a là human → không hồi sinh
-  J.undo(db);
+  eq(J.undo(db).ruleOff, true, "phải báo cho UI biết luật cũ đã tắt");
   eq(state(db, a.id), ["new", null, null], "không được quay về doubt của một luật đã tắt");
   invariants(db);
 });

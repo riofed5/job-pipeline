@@ -103,7 +103,8 @@ export default function App() {
         if (r.nothing) { setToast("Không còn gì để hoàn tác"); return; }
         setJobs((js) => js.map((x) => (x.id === r.job.id ? r.job : x)));
         const bin = BINS.find((b) => b.id === r.job.status);
-        setToast(`Đã hoàn tác: ${r.job.title} · ${r.job.company} → ${bin ? bin.label : r.job.status}`);
+        const why = r.ruleOff ? " (luật cũ đã tắt)" : "";
+        setToast(`Đã hoàn tác: ${r.job.title} · ${r.job.company} → ${bin ? bin.label : r.job.status}${why}`);
       })
       .catch(fail);
   }, [fail]);

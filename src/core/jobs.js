@@ -167,13 +167,15 @@ export function undo(db) {
     let decidedBy = e.prev_decided_by;
     let killedBy = e.prev_killed_by;
     // Trả tin về quyết định của một luật đã tắt sẽ phá nguyên tắc 3 — xử lý như lúc tắt luật.
-    if (decidedBy === "rule" && !stmt(db, "SELECT 1 FROM rules WHERE id = ? AND enabled = 1").get(killedBy)) {
+    // U lúc này không còn là phép nghịch đảo, nên báo ruleOff để UI nói lý do.
+    const ruleOff = decidedBy === "rule" && !stmt(db, "SELECT 1 FROM rules WHERE id = ? AND enabled = 1").get(killedBy);
+    if (ruleOff) {
       status = reviveTarget(status);
       decidedBy = null;
       killedBy = null;
     }
     writeStatus(db, job, { status, decidedBy, killedBy, by: "human", undoOf: e.id, at: now(), resetClock: true });
-    return { job: getJob(db, job.id) };
+    return { job: getJob(db, job.id), ruleOff };
   })();
 }
 
