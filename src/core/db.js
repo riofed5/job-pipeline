@@ -112,6 +112,16 @@ export function openDb(file) {
   return db;
 }
 
+/* Dump mọi bảng cho nút "Tải file sao lưu". Đây là file sao lưu, không phải màn hình — có description. */
+export function exportAll(db) {
+  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings"];
+  return {
+    exportedAt: now(),
+    schemaVersion: db.pragma("user_version", { simple: true }),
+    ...Object.fromEntries(tables.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()])),
+  };
+}
+
 /* ---------------------------- sao lưu ----------------------------
    Tự kích hoạt: gọi lúc khởi động và ở mỗi request ghi. Không có timer —
    chỉ so thời điểm bản gần nhất trong bộ nhớ. VACUUM INTO chứ không cp file,
