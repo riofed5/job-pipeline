@@ -1,3 +1,4 @@
 import { createRoot } from "react-dom/client";
+import App from "./App.jsx";
 
-createRoot(document.getElementById("root")).render(<div>Bàn phân loại</div>);
+createRoot(document.getElementById("root")).render(<App />);
