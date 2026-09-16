@@ -62,9 +62,25 @@ export function patchRule(db, id, patch) {
 
 /* ---------------------------- cài đặt ---------------------------- */
 
+export const DEFAULT_LOCATIONS = "Finland, Suomi, Helsinki, Espoo, Vantaa, Tampere, Turku, Oulu, Jyväskylä, Remote";
+
 export function getSettings(db) {
   const m = Object.fromEntries(db.prepare("SELECT key, value FROM settings").all().map((r) => [r.key, r.value]));
-  return { startDate: m.start_date, lastSweep: m.last_sweep ?? null, maybeTTL: Number(m.maybe_ttl) || 21 };
+  let lastPullResult = null;
+  try { lastPullResult = m.last_pull_result ? JSON.parse(m.last_pull_result) : null; } catch { /* bản ghi hỏng thì coi như chưa có */ }
+  return {
+    startDate: m.start_date,
+    lastSweep: m.last_sweep ?? null,
+    maybeTTL: Number(m.maybe_ttl) || 21,
+    pullLocations: m.pull_locations ?? DEFAULT_LOCATIONS,
+    lastPull: m.last_pull ?? null,
+    lastPullResult,
+  };
+}
+
+export function setSetting(db, key, value) {
+  db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(key, String(value));
 }
 
 export function markSweep(db) {
@@ -84,7 +100,12 @@ const toCompany = (c) => ({
   url: c.careers_url ?? "",
   note: c.note ?? "",
   ats: c.ats,
+  atsToken: c.ats_token,
   lastPull: c.last_pull,
+  lastNewAt: c.last_new_at,
+  pullCount: c.pull_count,
+  pullTotal: c.pull_total,
+  lastError: c.last_error,
 });
 
 export const listCompanies = (db) => db.prepare("SELECT * FROM companies ORDER BY name").all().map(toCompany);
@@ -114,6 +135,31 @@ export function patchCompany(db, id, patch = {}) {
   return toCompany(db.prepare("SELECT * FROM companies WHERE id = ?").get(id));
 }
 
+export function getCompany(db, id) {
+  const c = db.prepare("SELECT * FROM companies WHERE id = ?").get(id);
+  return c ? toCompany(c) : null;
+}
+
+/* Kết quả dò ATS. platform = 'manual' nghĩa là dò không ra, để email alert lo. Đổi ATS thì bỏ ETag cũ. */
+export function setCompanyAts(db, id, { platform, token = null }) {
+  const r = db.prepare("UPDATE companies SET ats = ?, ats_token = ?, ats_etag = NULL, last_error = NULL WHERE id = ?")
+    .run(platform, token, id);
+  if (!r.changes) throw httpError(404, "không có công ty này");
+  return getCompany(db, id);
+}
+
+/* Ghi kết quả một lần kéo. last_new_at chỉ đổi khi có tin MỚI — đây là con số phát hiện nguồn chết.
+   total/count = feed trả về / giữ lại sau lọc địa điểm; để bộ lọc không mù. */
+export function markCompanyPull(db, id, { added = 0, count = null, total = null, etag, error = null } = {}) {
+  const at = now();
+  db.transaction(() => {
+    db.prepare(`UPDATE companies SET last_pull = ?, pull_count = ?, pull_total = ?, last_error = ?,
+      last_new_at = CASE WHEN ? > 0 THEN ? ELSE last_new_at END WHERE id = ?`)
+      .run(at, count, total, error, added, at, id);
+    if (etag !== undefined) db.prepare("UPDATE companies SET ats_etag = ? WHERE id = ?").run(etag, id);
+  })();
+}
+
 export function seedCompanies(db) {
   const have = new Set(listCompanies(db).map((c) => norm(c.name)));
   const missing = SEED_COMPANIES.filter(([n]) => !have.has(norm(n)));
@@ -125,9 +171,19 @@ export function seedCompanies(db) {
 
 /* ---------------------------- nguồn ---------------------------- */
 
-const toSource = (s) => ({ id: s.id, name: s.name, kind: s.kind, url: s.url, alert: Boolean(s.alert_on), lastPull: s.last_pull });
+const toSource = (s) => ({
+  id: s.id, name: s.name, kind: s.kind, url: s.url, alert: Boolean(s.alert_on),
+  lastPull: s.last_pull, lastNewAt: s.last_new_at, pullCount: s.pull_count, lastError: s.last_error,
+});
 
 export const listSources = (db) => db.prepare("SELECT * FROM sources ORDER BY rowid").all().map(toSource);
+
+export function markSourcePull(db, id, { added = 0, count = null, error = null } = {}) {
+  const at = now();
+  db.prepare(`UPDATE sources SET last_pull = ?, pull_count = ?, last_error = ?,
+    last_new_at = CASE WHEN ? > 0 THEN ? ELSE last_new_at END WHERE id = ?`)
+    .run(at, count, error, added, at, id);
+}
 
 export function patchSource(db, id, { alert } = {}) {
   if (typeof alert !== "boolean") throw httpError(400, "alert phải là true/false");

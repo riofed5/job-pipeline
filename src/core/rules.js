@@ -1,6 +1,6 @@
 /* Engine luật. Thuần — không đụng DB. */
 
-export const FIELDS = ["title", "company", "lang", "any"];
+export const FIELDS = ["title", "company", "location", "lang", "any"];
 export const ACTIONS = ["kill", "doubt"];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -31,6 +31,7 @@ export function compileRules(rules) {
 function haystack(job, field) {
   if (field === "title") return job.title;
   if (field === "company") return job.company;
+  if (field === "location") return job.location;
   if (field === "lang") return job.adLanguage;
   if (field === "any") return [job.title, job.company, job.location, job.note].filter(Boolean).join(" ");
   return "";

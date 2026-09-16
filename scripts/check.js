@@ -12,6 +12,9 @@ import * as C from "../src/core/config.js";
 import { fingerprint } from "../src/core/dedupe.js";
 import { compileRules, compileTerm, evaluate } from "../src/core/rules.js";
 import { manualSource } from "../src/ingest/normalize.js";
+import { htmlToText } from "../src/ingest/html.js";
+import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
+import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -345,6 +348,199 @@ check("sao lưu: .tmp sót lại không chặn, chạy liên tiếp không lỗi
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/* ============================ bước 2: ATS ============================ */
+
+function checkAsync(name, fn) {
+  return fn().then(() => console.log(`PASS  ${name}`), (e) => { failed++; console.log(`FAIL  ${name}\n      ${e.message}`); });
+}
+
+check("luật trên địa điểm: 'Remote (USA)' bị doubt, 'Helsinki' không", () => {
+  const rules = compileRules([{ id: "us", field: "location", match: "usa, united states", action: "doubt", enabled: 1, position: 0 }]);
+  ok(evaluate({ title: "Backend Engineer", location: "Remote (USA)" }, rules), "USA phải khớp");
+  ok(!evaluate({ title: "Backend Engineer", location: "Helsinki" }, rules), "Helsinki không được khớp");
+  const db = openDb(":memory:");
+  const r = C.createRule(db);
+  C.patchRule(db, r.id, { field: "location", match: "usa", action: "doubt" });
+  J.toggleRule(db, r.id);
+  const a = add(db, "Data Engineer", "Wolt", { location: "Remote, USA" });
+  eq(state(db, a.id), ["doubt", "rule", r.id], "nạp qua đường ingest");
+  invariants(db);
+});
+
+check("html → chữ: giữ link dạng 'chữ (url)', bỏ script, giải mã entity", () => {
+  const html = `<html><head><style>a{}</style></head><body><script>x()</script>
+    <p>Hi &amp; <b>welcome</b></p><a href="https://x.fi/job/1?a=1&amp;b=2">Backend Engineer</a><br>
+    <a href="mailto:hr@x.fi">mail</a><table><tr><td>Wolt</td></tr></table></body></html>`;
+  const t = htmlToText(html, { keepLinks: true });
+  ok(t.includes("Hi & welcome"), `entity: ${t}`);
+  ok(t.includes("Backend Engineer (https://x.fi/job/1?a=1&b=2)"), `link: ${t}`);
+  ok(!t.includes("x()") && !t.includes("a{}"), "script/style phải biến mất");
+  ok(!t.includes("mailto"), "mailto không thành link");
+  ok(htmlToText("<a href='https://x.fi'>Job</a>").trim() === "Job", "không keepLinks thì chỉ còn chữ");
+});
+
+check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", () => {
+  const cases = {
+    greenhouse: [JSON.stringify({ jobs: [{ id: 1, title: "Backend Engineer", absolute_url: "https://boards.greenhouse.io/wolt/jobs/1", location: { name: "Helsinki, Finland" }, updated_at: "2026-09-01T00:00:00Z", content: "&lt;p&gt;Hello &amp;amp; hi&lt;/p&gt;" }] }), "wolt"],
+    lever: [JSON.stringify([{ id: "a", text: "Data Engineer", hostedUrl: "https://jobs.lever.co/x/a", categories: { location: "Helsinki" }, createdAt: 1756684800000, descriptionPlain: "JD" }]), "x"],
+    ashby: [JSON.stringify({ jobs: [{ id: "a", title: "SRE", jobUrl: "https://jobs.ashbyhq.com/x/a", location: "Helsinki", isRemote: true, publishedAt: "2026-09-01", descriptionHtml: "<p>JD</p>" }] }), "x"],
+    recruitee: [JSON.stringify({ offers: [{ id: 1, title: "Dev", careers_url: "https://x.recruitee.com/o/dev", city: "Espoo", country: "Finland", created_at: "2026-09-01", description: "<p>JD</p>" }] }), "x"],
+    smartrecruiters: [JSON.stringify({ content: [{ id: "99", name: "QA Engineer", location: { city: "Tampere", country: "fi" }, releasedDate: "2026-09-01T00:00:00Z" }] }), "x"],
+    workable: [JSON.stringify({ jobs: [{ title: "Frontend", shortcode: "AB", url: "https://apply.workable.com/x/j/AB", city: "Oulu", country: "Finland", published_on: "2026-09-01", description: "<p>JD</p>" }] }), "x"],
+    personio: ["<workzag-jobs><position><id>7</id><office>Helsinki</office><name>Ohjelmistokehittäjä</name><jobDescriptions><jobDescription><name>Tehtävä</name><value><![CDATA[<p>Meillä ja sinulla</p>]]></value></jobDescription></jobDescriptions></position></workzag-jobs>", "acme"],
+    teamtailor: ["<rss><channel><item><title>Platform Engineer</title><link>https://career.acme.fi/jobs/1</link><location>Helsinki</location><pubDate>Mon, 01 Sep 2026 00:00:00 GMT</pubDate><description><![CDATA[<p>JD</p>]]></description></item></channel></rss>", "https://career.acme.fi"],
+  };
+  for (const [platform, [body, token]] of Object.entries(cases)) {
+    const items = parseFeed(platform, body, token);
+    eq(items.length, 1, `${platform}: số tin`);
+    const it = items[0];
+    ok(it.title && it.url && /^https:\/\//.test(it.url), `${platform}: thiếu title/url: ${JSON.stringify(it)}`);
+    ok(it.location, `${platform}: thiếu location`);
+    ok(!it.postedAt || !Number.isNaN(Date.parse(it.postedAt)), `${platform}: postedAt hỏng`);
+  }
+  eq(parseFeed("greenhouse", cases.greenhouse[0], "wolt")[0].description, "Hello & hi", "greenhouse content giải mã hai lớp");
+  eq(parseFeed("ashby", cases.ashby[0], "x")[0].location, "Helsinki, Remote", "ashby: gộp remote vào location");
+  ok(parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2025-09-01") || parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2026-09-01"), "lever: ms epoch");
+  let threw = false;
+  try { parseFeed("greenhouse", "{}", "x"); } catch { threw = true; }
+  ok(threw, "feed sai dạng phải ném lỗi, không trả rỗng");
+});
+
+check("lọc địa điểm: không phân biệt hoa thường, nhiều thành phố giữ, trống giữ, ghi số ngoài phạm vi", () => {
+  const items = [
+    { title: "a", location: "HELSINKI, Finland" },
+    { title: "b", location: "Helsinki, Stockholm, Berlin" },
+    { title: "c", location: "Berlin" },
+    { title: "d", location: null },
+    { title: "e", location: "Remote (USA)" },
+  ];
+  const { kept, dropped } = filterLocation(items, "Finland, helsinki, Remote");
+  eq(kept.map((x) => x.title), ["a", "b", "d", "e"], "giữ");
+  eq(dropped.map((x) => x.title), ["c"], "ngoài phạm vi");
+  eq(filterLocation(items, "").kept.length, 5, "danh sách trống = không lọc");
+});
+
+check("đoán ngôn ngữ tin: dấu trong chức danh, hoặc JD nhiều từ Phần Lan", () => {
+  eq(guessLanguage("Ohjelmistokehittäjä", ""), "fi", "title có ä");
+  eq(guessLanguage("Software Developer", "Haemme tiimiin kehittäjää. Sinulla on kokemusta ja osaaminen."), "fi", "JD tiếng Phần Lan");
+  eq(guessLanguage("Software Developer", "We are looking for a developer to join our team in Helsinki."), "en", "JD tiếng Anh");
+});
+
+check("dò ATS từ URL: EngRadar, link ATS thẳng, Lever EU, token rác bị bỏ", () => {
+  eq(guessFromUrl("https://engradar.com/jobs/lever:wolt:abc123"), { platform: "lever", token: "wolt" }, "engradar");
+  eq(guessFromUrl("https://boards.greenhouse.io/wolt/jobs/1"), { platform: "greenhouse", token: "wolt" }, "greenhouse");
+  eq(guessFromUrl("https://job-boards.eu.greenhouse.io/aiven"), { platform: "greenhouse", token: "aiven" }, "greenhouse eu");
+  eq(guessFromUrl("https://jobs.eu.lever.co/acme/1"), { platform: "lever", token: "eu:acme" }, "lever eu");
+  eq(guessFromUrl("https://jobs.ashbyhq.com/supermetrics"), { platform: "ashby", token: "supermetrics" }, "ashby");
+  eq(guessFromUrl("https://acme.recruitee.com/"), { platform: "recruitee", token: "acme" }, "recruitee");
+  eq(guessFromUrl("https://careers.smartrecruiters.com/Wolt/"), { platform: "smartrecruiters", token: "Wolt" }, "smartrecruiters");
+  eq(guessFromUrl("https://apply.workable.com/acme/"), { platform: "workable", token: "acme" }, "workable");
+  eq(guessFromUrl("https://acme.jobs.personio.de/"), { platform: "personio", token: "acme" }, "personio");
+  eq(guessFromUrl("https://acme.teamtailor.com/jobs"), { platform: "teamtailor", token: "https://acme.teamtailor.com" }, "teamtailor");
+  eq(guessFromUrl("https://engradar.com/jobs/foo:bar:1"), null, "nền tảng lạ");
+  eq(guessFromUrl("https://www.workable.com/"), null, "www không phải token");
+  eq(guessFromUrl("https://careers.wolt.com/"), null, "trang thường");
+});
+
+check("dò ATS từ HTML: theo thứ tự xuất hiện, bỏ trùng, Teamtailor trên domain riêng", () => {
+  const html = `<link rel="stylesheet" href="https://cdn.x.com/a.css">
+    <iframe src="https://jobs.lever.co/wolt?lever-source=x"></iframe>
+    <script src="https://boards.greenhouse.io/embed/job_board/js?for=wolt"></script>
+    <a href="https://jobs.lever.co/wolt/123">Apply</a>`;
+  eq(guessFromHtml(html, "https://careers.wolt.com"), [{ platform: "lever", token: "wolt" }, { platform: "greenhouse", token: "wolt" }], "thứ tự và trùng");
+  eq(guessFromHtml('<script src="https://scripts.teamtailor-cdn.com/x.js"></script>', "https://career.acme.fi/jobs"),
+    [{ platform: "teamtailor", token: "https://career.acme.fi" }], "teamtailor domain riêng");
+  eq(guessFromHtml("<p>nothing</p>", "https://x.fi"), [], "không có gì");
+});
+
+await checkAsync("dò ATS: xác nhận bằng feed thật mới nhận; feed lỗi → thử ứng viên sau → hết thì manual", async () => {
+  const pages = {
+    "https://careers.acme.fi/": { status: 200, url: "https://careers.acme.fi/", body: '<script src="https://boards.greenhouse.io/embed/job_board/js?for=acme"></script><a href="https://jobs.lever.co/acme">x</a>' },
+    "https://careers.none.fi/": { status: 200, url: "https://careers.none.fi/", body: "<p>Send CV by mail</p>" },
+    "https://careers.down.fi/": { status: 503, url: "https://careers.down.fi/", body: "" },
+  };
+  const get = async (url) => pages[url] ?? { status: 404, url, body: "" };
+  const calls = [];
+  const fetchAtsFake = async (platform, token) => {
+    calls.push(`${platform}:${token}`);
+    if (platform === "greenhouse") throw new Error("HTTP 404");
+    if (platform === "smartrecruiters") return { items: [], total: 0, etag: null }; // 200 rỗng cho mọi slug
+    if (platform === "lever" && token === "acme") return { items: [{ title: "x" }], total: 1, etag: null };
+    throw new Error("HTTP 404");
+  };
+  const opt = { get, fetchAts: fetchAtsFake, gapMs: 0 };
+  const r = await detectAts("https://careers.acme.fi/", opt);
+  eq([r.platform, r.token, r.total, r.guessed], ["lever", "acme", 1, undefined], "ứng viên hai được xác nhận");
+  eq(calls, ["greenhouse:acme", "lever:acme"], "thứ tự thử");
+  eq(r.tried.length, 1, "ghi lại ứng viên hỏng");
+  calls.length = 0;
+  const none = await detectAts("https://careers.none.fi/", opt);
+  eq(none.platform, "manual", "không dấu vết, đoán slug không ra → manual");
+  ok(calls.some((c) => c === "lever:none") && calls.some((c) => c === "greenhouse:noneoy"), `đoán slug từ hostname: ${calls.join(" ")}`);
+  ok(!calls.some((c) => c.startsWith("smartrecruiters:") && none.platform !== "manual"), "200 rỗng không được nhận");
+  const down = await detectAts("https://careers.down.fi/", opt);
+  eq([down.platform, down.error], ["manual", "HTTP 503"], "trang chết → manual kèm lý do");
+  const direct = await detectAts("https://jobs.lever.co/acme", opt);
+  eq(direct.platform, "lever", "link ATS dán thẳng không cần HTML");
+  eq((await detectAts("not a url", opt)).platform, "manual", "không phải http");
+});
+
+await checkAsync("dò ATS qua trang con và đoán slug từ tên công ty", async () => {
+  const pages = {
+    "https://www.acme.fi/careers": { status: 200, url: "https://www.acme.fi/careers", body: '<a href="/careers/blog">blog</a><a href="/careers/open-positions">Open positions</a><a href="https://other.com/jobs">x</a>' },
+    "https://www.acme.fi/careers/open-positions": { status: 200, url: "https://www.acme.fi/careers/open-positions", body: '<iframe src="https://jobs.lever.co/acme"></iframe>' },
+    "https://www.bigcorp.fi/": { status: 200, url: "https://www.bigcorp.fi/", body: "<p>We use Greenhouse for recruiting</p>" },
+  };
+  const get = async (url) => pages[url] ?? { status: 404, url, body: "" };
+  const calls = [];
+  const fetchAtsFake = async (platform, token) => {
+    calls.push(`${platform}:${token}`);
+    if (platform === "lever" && token === "acme") return { items: [{ title: "x" }], total: 1, etag: null };
+    if (platform === "greenhouse" && token === "bigcorpoy") return { items: [{ title: "x" }], total: 3, etag: null };
+    throw new Error("HTTP 404");
+  };
+  const r = await detectAts("https://www.acme.fi/careers", { get, fetchAts: fetchAtsFake, gapMs: 0 });
+  eq([r.platform, r.token], ["lever", "acme"], "thấy ở trang con");
+  calls.length = 0;
+  const g = await detectAts("https://www.bigcorp.fi/", { name: "BigCorp Oy", get, fetchAts: fetchAtsFake, gapMs: 0 });
+  eq([g.platform, g.token, g.guessed], ["greenhouse", "bigcorpoy", true], "đoán slug + hậu tố oy");
+  eq(calls[0], "greenhouse:bigcorp", "trang nhắc Greenhouse thì thử Greenhouse trước");
+});
+
+await checkAsync("fetchAts: 304 → notModified; ETag trả về; HTTP lỗi ném", async () => {
+  const get = async (url, { etag }) => (etag === "v1"
+    ? { status: 304, body: "", etag: "v1", url }
+    : { status: 200, body: JSON.stringify([{ id: "1", text: "Dev", hostedUrl: "https://jobs.lever.co/x/1", categories: { location: "Helsinki" } }]), etag: "v1", url });
+  const first = await fetchAts("lever", "x", { get });
+  eq([first.total, first.etag, first.items[0].adLanguage], [1, "v1", "en"], "lần đầu");
+  const second = await fetchAts("lever", "x", { etag: "v1", get });
+  eq(second.notModified, true, "304");
+  let threw = "";
+  try { await fetchAts("lever", "x", { get: async (url) => ({ status: 500, body: "", etag: null, url }) }); } catch (e) { threw = e.message; }
+  ok(threw.startsWith("HTTP 500"), `lỗi HTTP: ${threw}`);
+});
+
+check("ghi kết quả kéo: last_new_at chỉ đổi khi có tin mới; setCompanyAts xóa ETag cũ", () => {
+  const db = openDb(":memory:");
+  const { company } = C.addCompany(db, { name: "Wolt" });
+  C.setCompanyAts(db, company.id, { platform: "lever", token: "wolt" });
+  C.markCompanyPull(db, company.id, { added: 3, count: 12, total: 340, etag: "e1" });
+  let c = C.getCompany(db, company.id);
+  ok(c.lastPull && c.lastNewAt === c.lastPull, "có tin mới → last_new_at = last_pull");
+  eq([c.pullCount, c.pullTotal], [12, 340], "giữ/tổng");
+  const firstNew = c.lastNewAt;
+  C.markCompanyPull(db, company.id, { added: 0, count: 12, total: 340, error: null });
+  c = C.getCompany(db, company.id);
+  eq(c.lastNewAt, firstNew, "không tin mới → last_new_at giữ nguyên");
+  C.markCompanyPull(db, company.id, { error: "HTTP 500" });
+  eq(C.getCompany(db, company.id).lastError, "HTTP 500", "lỗi được ghi");
+  C.setCompanyAts(db, company.id, { platform: "manual" });
+  eq(one(db, "SELECT ats, ats_token, ats_etag e FROM companies WHERE id = ?", company.id), { ats: "manual", ats_token: null, e: null }, "manual + bỏ etag");
+  C.markSourcePull(db, "s1", { added: 2, count: 5 });
+  const s = C.listSources(db).find((x) => x.id === "s1");
+  ok(s.lastPull && s.lastNewAt, "nguồn: ghi được");
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

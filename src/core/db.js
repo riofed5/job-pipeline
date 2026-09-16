@@ -12,7 +12,7 @@ const SCHEMA_V1 = `
 CREATE TABLE rules (
   id          TEXT PRIMARY KEY,
   label       TEXT NOT NULL,
-  field       TEXT NOT NULL,              -- title | company | lang | any
+  field       TEXT NOT NULL,              -- title | company | location | lang | any
   match       TEXT NOT NULL DEFAULT '',
   action      TEXT NOT NULL,              -- kill | doubt
   enabled     INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +81,27 @@ CREATE TABLE sources (
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
 `;
 
+/* v2 — bước 2/3: kết quả kéo theo công ty và theo nguồn, mail đã xử lý, tin đã đóng. */
+const SCHEMA_V2 = `
+ALTER TABLE companies ADD COLUMN last_new_at TEXT;   -- lần gần nhất kéo ra tin MỚI (không phải trùng)
+ALTER TABLE companies ADD COLUMN pull_count  INTEGER; -- số tin giữ lại ở lần kéo gần nhất
+ALTER TABLE companies ADD COLUMN pull_total  INTEGER; -- số tin feed trả về ở lần đó, trước lọc địa điểm
+ALTER TABLE companies ADD COLUMN last_error  TEXT;
+ALTER TABLE companies ADD COLUMN ats_etag    TEXT;
+ALTER TABLE sources ADD COLUMN last_new_at TEXT;
+ALTER TABLE sources ADD COLUMN pull_count  INTEGER;
+ALTER TABLE sources ADD COLUMN last_error  TEXT;
+ALTER TABLE jobs ADD COLUMN closed_at TEXT;           -- tin ats:* biến khỏi feed; chỉ đánh dấu, không đổi status
+
+-- Mail đã đọc. Không đụng cờ hay label trên hộp thư; đây là bộ nhớ duy nhất.
+CREATE TABLE mail_seen (
+  message_id   TEXT PRIMARY KEY,                     -- Message-ID, hoặc hash(from+date+subject) khi thiếu
+  processed_at TEXT NOT NULL,
+  source       TEXT,
+  found        INTEGER NOT NULL DEFAULT 0
+);
+`;
+
 const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V1);
@@ -93,6 +114,9 @@ const MIGRATIONS = [
     const setting = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)");
     setting.run("start_date", localDate());
     setting.run("maybe_ttl", "21");
+  },
+  (db) => {
+    db.exec(SCHEMA_V2);
   },
 ];
 
@@ -114,7 +138,7 @@ export function openDb(file) {
 
 /* Dump mọi bảng cho nút "Tải file sao lưu". Đây là file sao lưu, không phải màn hình — có description. */
 export function exportAll(db) {
-  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings"];
+  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings", "mail_seen"];
   return {
     exportedAt: now(),
     schemaVersion: db.pragma("user_version", { simple: true }),

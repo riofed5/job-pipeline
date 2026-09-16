@@ -677,6 +677,7 @@ function Rules({ rules, jobs, toggleRule, editRule, addRule, rerun }) {
               <select value={r.field} onChange={(e) => editRule(r.id, { field: e.target.value })}>
                 <option value="title">chức danh</option>
                 <option value="company">công ty</option>
+                <option value="location">địa điểm</option>
                 <option value="lang">ngôn ngữ tin</option>
                 <option value="any">bất kỳ đâu</option>
               </select>
