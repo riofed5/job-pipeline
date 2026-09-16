@@ -67,3 +67,17 @@ sqlite3 -header data/jobs.db "SELECT substr(at,1,10) AS ngay, COUNT(*) AS hoan_t
 | Hoàn tác (`events.undo_of IS NOT NULL`) | 0 |
 
 Luật giữ 2/25 = 8%. Cách tính này khác ô "% tin luật giữ" ở bảng trên: bảng trên gộp cả hai trạng thái, đây tách riêng.
+
+## Bước 2 + 3 — 2026-09-16
+
+Bốn commit: detect-ats + ats, pull + UI, imap, cảnh báo nguồn chết. `npm run check` xanh (41 kịch bản).
+
+**Chưa xong, cần quyết hoặc điền tay**
+- Aiven giấu token Greenhouse phía server (trang chỉ có `gh_jid`), dò không ra. Chưa có ô nhập token tay trong UI; muốn kéo Aiven thì cần thêm ô đó hoặc điền `ats`/`ats_token` bằng sqlite.
+- RELEX chạy Workday — chưa hỗ trợ. Oura trả 403 cho công cụ. Cả hai đánh `manual`.
+- IMAP mới kiểm bằng client giả; máy chưa có `.env` nên chưa nối Gmail thật lần nào. Việc đầu tiên: chép `.env.example` → `.env`, tạo App Password, tạo filter Gmail gắn label `jobalerts`, rồi bấm Kéo ngay.
+- Laura / Saima (ATS Phần Lan) chưa dò.
+- Jobly không có dòng trong bảng `sources`, nên thống kê nguồn chết không theo dõi nó dù kênh vẫn ghi vào sightings.
+- Parser mail dùng `claude-opus-5` (giá 5 $/25 $ mỗi triệu token). Một mail alert ~5–10k token → dưới 0,1 $ mỗi mail. Đổi bằng `CLAUDE_MODEL` trong `.env` nếu muốn rẻ hơn (`claude-sonnet-5`: 2 $/10 $).
+
+**Đã thấy khi kéo thật (Wolt, Greenhouse)**: feed 242 tin, giữ 26 sau lọc địa điểm, 19 bị luật xử lý. "Remote" trong danh sách lọc cho lọt "Krakow, Poland; Remote" — đúng như đã chốt, luật địa điểm lo.
