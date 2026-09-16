@@ -5,17 +5,16 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 
 ---
 
-## BƯỚC HIỆN TẠI: 1
+## BƯỚC HIỆN TẠI: 2
 
-**Chỉ được làm bước 1 trong mục 8 của SPEC.md:** schema, rules engine, UI port, nạp bằng tay.
+**Chỉ được làm bước 2 và 3 trong mục 8 của SPEC.md:** detect-ats.js, ats.js, imap.js,
+POST /api/pull, tự kéo khi mở app nếu quá 12 tiếng.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
-- `ats.js`, `detect-ats.js`, `tmt.js`, `imap.js`, `websearch.js`, `enrich.js`
-- cron, scheduler, background job
-- gọi Anthropic API
+- `tmt.js`, `websearch.js`, `enrich.js`
+- cron, scheduler, background job có timer
 - Docker, CI, deploy
-- test framework (trừ khi tao yêu cầu)
 
 Nếu thấy một trong số đó cần thiết, **nói ra và dừng lại**. Đừng tự làm.
 
@@ -34,7 +33,7 @@ Con số ở dòng tiêu đề trên là cổng chặn duy nhất. Nó chỉ đ�
    Đây là ràng buộc thiết kế, không phải thiếu sót.
 
 3. **Luật hoàn tác được theo lô.** Mọi quyết định tự động ghi `killed_by`. Tắt một luật →
-   mọi tin nó từng xử lý quay về `new`, trừ tin đã có `decided_by = 'human'`.
+   mọi tin nó từng xử lý quay về `new` (tin đã lưu trữ về `maybe`), trừ tin đã có `decided_by = 'human'`.
 
 4. **Quyết định tay thắng luật.** Luật không bao giờ ghi đè lên tin người đã quyết định.
 
