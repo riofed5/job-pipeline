@@ -12,6 +12,7 @@ import * as config from "../core/config.js";
 import { fingerprint } from "../core/dedupe.js";
 import { fetchAts as realFetchAts, filterLocation } from "./ats.js";
 import { imapConfigured, createImapStep } from "./imap.js";
+import { summarize } from "./summary.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STALE_MS = 12 * 60 * 60 * 1000;
@@ -119,16 +120,6 @@ export function createPuller(db, { fetchAts = realFetchAts, extra = defaultExtra
   }
 
   return { start, runIfStale, status, wait };
-}
-
-/* Tóm tắt một dòng cho toast. */
-export function summarize(results) {
-  const sum = (k) => results.reduce((n, r) => n + (r[k] || 0), 0);
-  const errors = results.filter((r) => r.error).length;
-  const parts = [`${sum("added")} tin mới`, `${sum("auto")} bị luật xử lý`, `${sum("dup")} trùng đã gộp nguồn`];
-  if (sum("dropped")) parts.push(`${sum("dropped")} ngoài phạm vi địa điểm`);
-  if (errors) parts.push(`${errors} nguồn lỗi`);
-  return parts.join(" · ");
 }
 
 /* ---------------------------- CLI ---------------------------- */

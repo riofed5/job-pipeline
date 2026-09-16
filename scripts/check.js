@@ -15,7 +15,8 @@ import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
 import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
-import { createPuller, summarize, atsSource } from "../src/ingest/pull.js";
+import { createPuller, atsSource } from "../src/ingest/pull.js";
+import { summarize } from "../src/ingest/summary.js";
 import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep, imapConfigured, fetchAlertMails } from "../src/ingest/imap.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -317,6 +318,39 @@ check("needs_rerun: bật hoặc sửa luật đang bật → nhắc; chạy l�
     threw = true;
   }
   ok(threw, "PATCH không được phép bật/tắt luật");
+});
+
+/* UI chạy trong trình duyệt: mọi file nó import (đệ quy) phải thuần. Một import lạc vào core/db.js là
+   Vite phục vụ better-sqlite3 cho trình duyệt và app không mở được. */
+function uiImportClosure() {
+  const uiDir = path.join(ROOT, "src/ui");
+  const seen = new Map();
+  const visit = (file) => {
+    if (seen.has(file)) return;
+    const src = fs.readFileSync(file, "utf8");
+    seen.set(file, src);
+    const re = /\bfrom\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+["']([^"']+)["']/gm;
+    let m;
+    while ((m = re.exec(src))) {
+      const spec = m[1] ?? m[2] ?? m[3];
+      if (!spec.startsWith(".")) continue; // gói npm và node: không đi theo; nội dung file sẽ bị quét bằng chuỗi
+      visit(path.resolve(path.dirname(file), spec));
+    }
+  };
+  for (const f of fs.readdirSync(uiDir)) if (/\.(jsx?|html)$/.test(f)) visit(path.join(uiDir, f));
+  return seen;
+}
+
+check("src/ui và mọi file nó import (đệ quy) không đụng better-sqlite3, node:fs, node:util", () => {
+  const closure = uiImportClosure();
+  ok(closure.size >= 5, `quét được quá ít file: ${closure.size}`);
+  const bad = [];
+  for (const [file, src] of closure) {
+    for (const needle of ["better-sqlite3", "node:fs", "node:util", "node:crypto", "node:path", "imapflow", "mailparser"]) {
+      if (src.includes(needle)) bad.push(`${path.relative(ROOT, file)} chứa ${needle}`);
+    }
+  }
+  eq(bad, [], "file UI kéo theo thứ chỉ chạy ở server");
 });
 
 check("không có lệnh xóa nào trong src/", () => {

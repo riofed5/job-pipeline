@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "./api.js";
 import { norm } from "../core/dedupe.js";
 import { SEED_COMPANIES } from "../core/seed.js";
-import { summarize } from "../ingest/pull.js";
+import { summarize } from "../ingest/summary.js";
 
 /* ============================================================
    Bàn phân loại — job pipeline (bản local)
