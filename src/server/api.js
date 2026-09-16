@@ -7,7 +7,7 @@ import { openDb, createBackups, exportAll } from "../core/db.js";
 import * as jobs from "../core/jobs.js";
 import * as config from "../core/config.js";
 import { manualSource } from "../ingest/normalize.js";
-import { createPuller } from "../ingest/pull.js";
+import { createPuller, loadEnv } from "../ingest/pull.js";
 import { detectAts } from "../ingest/detect-ats.js";
 
 /* Route mỏng: không có SQL ở đây, mọi thứ đi qua core/. Không có route xóa. */
@@ -19,6 +19,7 @@ const DATA = process.env.DATA_DIR || path.join(ROOT, "data");
 const db = openDb(path.join(DATA, "jobs.db"));
 const backups = createBackups(db, path.join(DATA, "backups"));
 backups.runIfStale(); // sao lưu trước khi phục vụ
+loadEnv(); // IMAP + ANTHROPIC_API_KEY từ .env, trước khi tạo puller
 const puller = createPuller(db);
 
 const app = express();

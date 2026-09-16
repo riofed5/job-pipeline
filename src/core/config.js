@@ -103,6 +103,7 @@ const toCompany = (c) => ({
   atsToken: c.ats_token,
   atsEtag: c.ats_etag,
   lastPull: c.last_pull,
+  firstPull: c.first_pull,
   lastNewAt: c.last_new_at,
   pullCount: c.pull_count,
   pullTotal: c.pull_total,
@@ -154,9 +155,9 @@ export function setCompanyAts(db, id, { platform, token = null }) {
 export function markCompanyPull(db, id, { added = 0, count = null, total = null, etag, error = null } = {}) {
   const at = now();
   db.transaction(() => {
-    db.prepare(`UPDATE companies SET last_pull = ?, pull_count = ?, pull_total = ?, last_error = ?,
+    db.prepare(`UPDATE companies SET last_pull = ?, first_pull = COALESCE(first_pull, ?), pull_count = ?, pull_total = ?, last_error = ?,
       last_new_at = CASE WHEN ? > 0 THEN ? ELSE last_new_at END WHERE id = ?`)
-      .run(at, count, total, error, added, at, id);
+      .run(at, at, count, total, error, added, at, id);
     if (etag !== undefined) db.prepare("UPDATE companies SET ats_etag = ? WHERE id = ?").run(etag, id);
   })();
 }
@@ -174,16 +175,26 @@ export function seedCompanies(db) {
 
 const toSource = (s) => ({
   id: s.id, name: s.name, kind: s.kind, url: s.url, alert: Boolean(s.alert_on),
-  lastPull: s.last_pull, lastNewAt: s.last_new_at, pullCount: s.pull_count, lastError: s.last_error,
+  lastPull: s.last_pull, firstPull: s.first_pull, lastNewAt: s.last_new_at, pullCount: s.pull_count, lastError: s.last_error,
 });
 
 export const listSources = (db) => db.prepare("SELECT * FROM sources ORDER BY rowid").all().map(toSource);
 
 export function markSourcePull(db, id, { added = 0, count = null, error = null } = {}) {
   const at = now();
-  db.prepare(`UPDATE sources SET last_pull = ?, pull_count = ?, last_error = ?,
+  db.prepare(`UPDATE sources SET last_pull = ?, first_pull = COALESCE(first_pull, ?), pull_count = ?, last_error = ?,
     last_new_at = CASE WHEN ? > 0 THEN ? ELSE last_new_at END WHERE id = ?`)
-    .run(at, count, error, added, at, id);
+    .run(at, at, count, error, added, at, id);
+}
+
+/* ---------------------------- mail đã xử lý ----------------------------
+   Bộ nhớ duy nhất của imap.js. Hộp thư không bị đụng vào. */
+
+export const mailSeen = (db, key) => Boolean(db.prepare("SELECT 1 FROM mail_seen WHERE message_id = ?").get(key));
+
+export function markMailSeen(db, key, source, found) {
+  db.prepare(`INSERT INTO mail_seen (message_id, processed_at, source, found) VALUES (?, ?, ?, ?)
+    ON CONFLICT (message_id) DO NOTHING`).run(key, now(), source, found);
 }
 
 export function patchSource(db, id, { alert } = {}) {

@@ -16,6 +16,7 @@ import { htmlToText } from "../src/ingest/html.js";
 import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 import { createPuller, summarize, atsSource } from "../src/ingest/pull.js";
+import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep, imapConfigured, fetchAlertMails } from "../src/ingest/imap.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -567,7 +568,7 @@ await checkAsync("kéo: mọi tin qua ingest + luật; số feed/giữ/ngoài ph
     ]);
     return feedOf([{ title: "Data Engineer", location: null, url: "https://a/1" }]);
   };
-  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  const p = createPuller(db, { fetchAts, extra: [], gapMs: 0 });
   eq(p.start().started, true, "bắt đầu");
   eq(p.start().started, false, "đang chạy thì không chạy chồng");
   ok(p.status().running, "running");
@@ -599,7 +600,7 @@ await checkAsync("kéo lại: 304 không đụng gì; tin biến khỏi feed →
   const wolt = atsCompany(db, "Wolt", "greenhouse", "wolt");
   let feed = feedOf([{ title: "Backend Engineer", location: "Helsinki" }, { title: "Data Engineer", location: "Helsinki" }], "v1");
   const fetchAts = async (platform, token, { etag }) => (etag === feed.etag ? { notModified: true, etag } : feed);
-  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  const p = createPuller(db, { fetchAts, extra: [], gapMs: 0 });
   p.start(); await p.wait();
   const be = one(db, "SELECT id FROM jobs WHERE title = 'Backend Engineer'").id;
   J.decide(db, be, "queue");
@@ -631,7 +632,7 @@ await checkAsync("runIfStale: chưa kéo → kéo; vừa kéo → không; quá 1
   let block;
   const fetchAts = () => new Promise((res) => { block = () => res(feedOf([])); });
   atsCompany(db, "Wolt", "greenhouse", "wolt");
-  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  const p = createPuller(db, { fetchAts, extra: [], gapMs: 0 });
   eq(p.runIfStale().started, true, "chưa kéo lần nào → kéo");
   eq(p.runIfStale().started, false, "đang chạy → không");
   block(); await p.wait();
@@ -647,10 +648,150 @@ await checkAsync("công ty manual hoặc chưa dò không được kéo", async 
   C.addCompany(db, { name: "NoAts" });
   atsCompany(db, "Manual Co", "manual", null);
   let calls = 0;
-  const p = createPuller(db, { fetchAts: async () => { calls++; return feedOf([]); }, gapMs: 0 });
+  const p = createPuller(db, { fetchAts: async () => { calls++; return feedOf([]); }, extra: [], gapMs: 0 });
   p.start();
   await p.wait();
   eq(calls, 0, "không gọi feed nào");
+});
+
+/* ============================ bước 3: IMAP ============================ */
+
+check("khóa mail: Message-ID, thiếu thì hash(from+date+subject)", () => {
+  eq(mailKey({ messageId: "<a@x>", from: "f", date: "d", subject: "s" }), "<a@x>", "có Message-ID");
+  const h1 = mailKey({ from: "jobs@linkedin.com", date: "2026-09-16", subject: "5 new jobs" });
+  const h2 = mailKey({ from: "jobs@linkedin.com", date: "2026-09-16", subject: "5 new jobs" });
+  const h3 = mailKey({ from: "jobs@linkedin.com", date: "2026-09-17", subject: "5 new jobs" });
+  ok(h1.startsWith("hash:") && h1 === h2 && h1 !== h3, "hash ổn định và phân biệt");
+});
+
+check("chữ đưa cho Claude: HTML ưu tiên hơn text/plain, link giữ dạng 'chức danh (url)'", () => {
+  const { text, truncated } = mailText({ html: '<p><a href="https://lnkd.in/x1">Backend Engineer</a> at Wolt</p>', text: "Backend Engineer at Wolt https://short/x" });
+  ok(text.includes("Backend Engineer (https://lnkd.in/x1)") && !text.includes("short/x"), text);
+  ok(!truncated, "không cắt");
+  eq(mailText({ text: "chỉ text" }).text, "chỉ text", "không có HTML thì lấy text");
+  ok(mailText({ text: "x".repeat(70_000) }).truncated, "quá 60k thì báo cắt");
+});
+
+check("kênh từ người gửi; khớp dòng trong bảng sources", () => {
+  eq(mailChannel({ from: "jobs-noreply@linkedin.com", fromName: "LinkedIn Job Alerts" }), "LinkedIn", "linkedin");
+  eq(mailChannel({ from: "noreply@duunitori.fi", fromName: "Duunivahti" }), "Duunitori", "duunivahti → Duunitori");
+  eq(mailChannel({ from: "alerts@thehub.io", fromName: "" }), "The Hub", "theo domain");
+  eq(mailChannel({ from: "x@unknown-board.com", fromName: "" }), "unknown-board.com", "không rõ thì domain");
+  const db = openDb(":memory:");
+  const sources = C.listSources(db);
+  eq(sourceFor(sources, "LinkedIn").id, "s1", "LinkedIn ↔ LinkedIn Jobs");
+  eq(sourceFor(sources, "Duunitori").id, "s2", "Duunitori");
+  eq(sourceFor(sources, "Oikotie").id, "s3", "Oikotie ↔ Oikotie Työpaikat");
+  eq(sourceFor(sources, "Jobly"), undefined, "không có dòng thì undefined");
+});
+
+await checkAsync("parser Claude: gọi đúng dạng, trả JSON, lọc tin thiếu chức danh; từ chối và lỗi HTTP ném", async () => {
+  let seen;
+  const fetchFn = async (url, init) => {
+    seen = { url, init, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ jobs: [
+      { title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1" },
+      { title: "", company: "X", location: "", url: "" },
+    ] }) }] }) };
+  };
+  const items = await extractJobs("mail", { apiKey: "k", model: "claude-opus-5", fetchFn });
+  eq(items, [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1" }], "kết quả");
+  eq(seen.url, "https://api.anthropic.com/v1/messages", "endpoint");
+  eq(seen.init.headers["x-api-key"], "k", "key");
+  eq(seen.init.headers["anthropic-version"], "2023-06-01", "version");
+  eq(seen.body.model, "claude-opus-5", "model");
+  eq(seen.body.output_config.format.type, "json_schema", "ép JSON");
+  eq(seen.body.messages[0].content, "mail", "mail là user turn");
+  let err = "";
+  try { await extractJobs("m", { apiKey: "k", fetchFn: async () => ({ ok: true, json: async () => ({ stop_reason: "refusal", content: [] }) }) }); } catch (e) { err = e.message; }
+  ok(/từ chối/.test(err), `refusal: ${err}`);
+  try { await extractJobs("m", { apiKey: "k", fetchFn: async () => ({ ok: false, status: 429, json: async () => ({ error: { message: "slow down" } }) }) }); } catch (e) { err = e.message; }
+  ok(/429/.test(err), `HTTP: ${err}`);
+  try { await extractJobs("m", { apiKey: "" }); } catch (e) { err = e.message; }
+  ok(/ANTHROPIC_API_KEY/.test(err), "thiếu key");
+});
+
+await checkAsync("bước IMAP: mỗi mail qua ingest + luật; mail đã xử lý không đọc lại; parser hỏng thì không đánh dấu; nguồn bật alert đều có last_pull", async () => {
+  const db = openDb(":memory:");
+  C.patchSource(db, "s1", { alert: true });
+  C.patchSource(db, "s3", { alert: true }); // Oikotie: bật alert nhưng không có mail
+  const mails = [
+    { key: "<m1@linkedin>", from: "jobs-noreply@linkedin.com", fromName: "LinkedIn", subject: "a", text: "M1", truncated: false },
+    { key: "<m2@duunitori>", from: "noreply@duunitori.fi", fromName: "Duunivahti", subject: "b", text: "M2", truncated: false },
+    { key: "<m3@linkedin>", from: "jobs-noreply@linkedin.com", fromName: "LinkedIn", subject: "c", text: "BOOM", truncated: false },
+  ];
+  const fetched = [];
+  const fetchMails = async ({ skip, label, user }) => {
+    eq([label, user], ["jobalerts", "me@gmail.com"], "cấu hình từ env");
+    const fresh = mails.filter((m) => !skip(m.key));
+    fetched.push(fresh.map((m) => m.key));
+    return { mails: fresh, scanned: mails.length };
+  };
+  let extracts = 0;
+  const extract = async (text) => {
+    extracts++;
+    if (text === "BOOM") throw new Error("Claude HTTP 500");
+    if (text === "M1") return [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://l/1" }, { title: "Sales Manager", company: "Wolt", location: "Helsinki", url: "https://l/2" }];
+    return [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://d/1" }];
+  };
+  const env = { IMAP_USER: "me@gmail.com", IMAP_APP_PASSWORD: "p", ANTHROPIC_API_KEY: "k" };
+  ok(imapConfigured(env) && !imapConfigured({}), "imapConfigured");
+  const step = createImapStep({ env, fetchMails, extract });
+  const p = createPuller(db, { fetchAts: async () => feedOf([]), extra: [step], gapMs: 0 });
+  p.start(); const s = await p.wait();
+  const li = s.results.find((r) => r.name === "LinkedIn");
+  const du = s.results.find((r) => r.name === "Duunitori");
+  eq([li.kind, li.mails, li.added, li.auto, li.error], ["imap", 1, 2, 1, "Claude HTTP 500"], "LinkedIn: 1 mail xong, 1 mail hỏng");
+  eq([du.mails, du.added, du.dup], [1, 0, 1], "Duunitori: trùng → gộp kênh");
+  eq(J.listJobs(db).find((j) => j.title === "Backend Engineer").channels, ["LinkedIn", "Duunitori"], "hai kênh");
+  eq(one(db, "SELECT COUNT(*) n FROM mail_seen").n, 2, "mail hỏng không được đánh dấu");
+  const src = Object.fromEntries(C.listSources(db).map((x) => [x.id, x]));
+  ok(src.s1.lastPull && src.s1.lastNewAt && src.s1.firstPull, "LinkedIn: có tin mới");
+  ok(src.s2.lastPull && !src.s2.lastNewAt, "Duunitori: chỉ trùng → không last_new_at");
+  ok(src.s3.lastPull && !src.s3.lastNewAt && src.s3.pullCount === 0, "Oikotie bật alert, không mail → vẫn ghi last_pull");
+  ok(!src.s5.lastPull, "nguồn không bật alert, không mail → không đụng");
+  eq(src.s1.lastError, "Claude HTTP 500", "lỗi ghi vào nguồn");
+
+  p.start(); await p.wait();
+  eq(fetched[1], ["<m3@linkedin>"], "lần hai chỉ còn mail hỏng lần trước");
+  eq(extracts, 4, "không gọi Claude lại cho mail đã xử lý");
+  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 2, "không nạp lại");
+  invariants(db);
+});
+
+await checkAsync("fetchAlertMails: cửa sổ 14 ngày, envelope trước rồi mới tải source của mail mới, không đổi cờ, luôn logout", async () => {
+  const calls = [];
+  const box = [
+    { uid: 1, envelope: { messageId: "<old@x>", from: [{ address: "a@x" }], date: new Date(), subject: "s" } },
+    { uid: 2, envelope: { messageId: "<new@x>", from: [{ address: "jobs@linkedin.com", name: "LinkedIn" }], date: new Date(), subject: "t" } },
+    { uid: 3, envelope: { from: [{ address: "b@x" }], date: new Date(), subject: "no id" } },
+  ];
+  const makeClient = () => ({
+    connect: async () => calls.push("connect"),
+    logout: async () => calls.push("logout"),
+    getMailboxLock: async (name) => { calls.push(`lock:${name}`); return { release: () => calls.push("release") }; },
+    fetch: async function* (q, opts) {
+      calls.push(`fetch:since=${q.since instanceof Date}:src=${Boolean(opts.source)}`);
+      for (const m of box) yield m;
+    },
+    fetchOne: async (uid) => {
+      calls.push(`one:${uid}`);
+      return { source: Buffer.from(`From: LinkedIn <jobs@linkedin.com>\r\nSubject: t\r\nContent-Type: text/html\r\n\r\n<a href="https://l/1">Backend Engineer</a>`) };
+    },
+    messageFlagsAdd: () => { throw new Error("không được đụng cờ"); },
+    messageDelete: () => { throw new Error("không được xóa"); },
+  });
+  const r = await fetchAlertMails({ label: "jobalerts", skip: (k) => k === "<old@x>", makeClient });
+  eq(r.scanned, 3, "quét 3");
+  eq(r.mails.map((m) => m.key), ["<new@x>", r.mails[1].key], "hai mail mới");
+  ok(r.mails[1].key.startsWith("hash:"), "mail không Message-ID dùng hash");
+  ok(r.mails[0].text.includes("Backend Engineer (https://l/1)"), r.mails[0].text);
+  eq(r.mails[0].from, "jobs@linkedin.com", "from");
+  eq(calls, ["connect", "lock:jobalerts", "fetch:since=true:src=false", "one:2", "one:3", "release", "logout"], "thứ tự gọi");
+});
+
+check("imap.js không xóa, không expunge, không đổi cờ mail", () => {
+  eq(scanSrc(/messageDelete|expunge|messageFlagsAdd|messageFlagsSet|messageMove|\\Deleted|\\Seen/), [], "chỗ đụng hộp thư");
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

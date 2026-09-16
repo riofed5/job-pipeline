@@ -102,6 +102,12 @@ CREATE TABLE mail_seen (
 );
 `;
 
+/* v3 — first_pull: để biết một nguồn đã được kéo bao lâu mà chưa ra tin mới nào. */
+const SCHEMA_V3 = `
+ALTER TABLE sources ADD COLUMN first_pull TEXT;
+ALTER TABLE companies ADD COLUMN first_pull TEXT;
+`;
+
 const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V1);
@@ -117,6 +123,9 @@ const MIGRATIONS = [
   },
   (db) => {
     db.exec(SCHEMA_V2);
+  },
+  (db) => {
+    db.exec(SCHEMA_V3);
   },
 ];
 

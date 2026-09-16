@@ -11,6 +11,7 @@ import * as jobs from "../core/jobs.js";
 import * as config from "../core/config.js";
 import { fingerprint } from "../core/dedupe.js";
 import { fetchAts as realFetchAts, filterLocation } from "./ats.js";
+import { imapConfigured, createImapStep } from "./imap.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STALE_MS = 12 * 60 * 60 * 1000;
@@ -18,7 +19,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export const atsSource = (c) => ({ source: `ats:${c.ats}:${c.atsToken}`, channel: "Trang công ty" });
 
-export function createPuller(db, { fetchAts = realFetchAts, extra = [], gapMs = 1000, staleMs = STALE_MS, log = () => {} } = {}) {
+/* Nạp .env ở gốc repo nếu có. Node 20.12+ có sẵn, không cần dotenv. */
+export function loadEnv() {
+  try { process.loadEnvFile(path.join(ROOT, ".env")); } catch { /* không có .env thì thôi */ }
+}
+
+/* Nguồn ngoài ATS đang cấu hình: IMAP khi đủ biến môi trường. */
+export const defaultExtra = () => (imapConfigured() ? [createImapStep()] : []);
+
+export function createPuller(db, { fetchAts = realFetchAts, extra = defaultExtra(), gapMs = 1000, staleMs = STALE_MS, log = () => {} } = {}) {
   let running = false;
   let startedAt = null;
   let finishedAt = null;
@@ -125,10 +134,13 @@ export function summarize(results) {
 /* ---------------------------- CLI ---------------------------- */
 
 async function main() {
+  loadEnv();
   const { openDb } = await import("../core/db.js");
   const db = openDb(path.join(process.env.DATA_DIR || path.join(ROOT, "data"), "jobs.db"));
   const puller = createPuller(db, {
-    log: (r) => console.log(`${(r.name ?? "").padEnd(28)} ${r.error ? `LỖI ${r.error}` : `${r.total ?? "-"} tin · ${r.kept ?? "-"} giữ · ${r.dropped ?? "-"} ngoài phạm vi · ${r.added} mới · ${r.dup} trùng${r.notModified ? " (không đổi)" : ""}`}`),
+    log: (r) => console.log(`${(r.name ?? "").padEnd(28)} ${r.error ? `LỖI ${r.error}` : r.kind === "imap"
+      ? `${r.mails} mail · ${r.added} mới · ${r.dup} trùng`
+      : `${r.total ?? "-"} tin · ${r.kept ?? "-"} giữ · ${r.dropped ?? "-"} ngoài phạm vi · ${r.added} mới · ${r.dup} trùng${r.notModified ? " (không đổi)" : ""}`}`),
   });
   puller.start();
   const s = await puller.wait();
