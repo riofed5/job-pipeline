@@ -30,7 +30,7 @@ function stmt(db, sql) {
 /* ---------------------------- đọc ---------------------------- */
 
 // Không có description: không màn hình nào ở bàn phân loại được hiện nó.
-const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by";
+const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at";
 
 const toJob = (r, channels) => ({
   id: r.id,
@@ -46,6 +46,7 @@ const toJob = (r, channels) => ({
   statusAt: r.status_at,
   decidedBy: r.decided_by,
   killedBy: r.killed_by,
+  closedAt: r.closed_at,
   channels,
 });
 
@@ -218,6 +219,25 @@ export function rerunRules(db) {
     }
     stmt(db, "UPDATE rules SET needs_rerun = 0").run();
     return { touched };
+  })();
+}
+
+/* Tín hiệu tin còn sống, chỉ ATS cho được: feed 200 thật mà tin từng thấy ở nguồn này không còn → closed_at.
+   Xuất hiện lại → bỏ closed_at. KHÔNG đổi status, không ghi event — chỉ là nhãn để khỏi mở tin chết. */
+export function markClosed(db, source, liveFingerprints) {
+  const live = new Set(liveFingerprints);
+  return db.transaction(() => {
+    const at = now();
+    let closed = 0;
+    let reopened = 0;
+    const rows = stmt(db, `SELECT j.id, j.fingerprint, j.closed_at FROM jobs j
+      JOIN sightings s ON s.job_id = j.id WHERE s.source = ?`).all(source);
+    for (const j of rows) {
+      const alive = live.has(j.fingerprint);
+      if (!alive && !j.closed_at) { stmt(db, "UPDATE jobs SET closed_at = ? WHERE id = ?").run(at, j.id); closed++; }
+      if (alive && j.closed_at) { stmt(db, "UPDATE jobs SET closed_at = NULL WHERE id = ?").run(j.id); reopened++; }
+    }
+    return { closed, reopened };
   })();
 }
 

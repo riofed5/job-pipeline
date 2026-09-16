@@ -45,4 +45,9 @@ export const api = {
   patchCompany: (id, patch) => send("PATCH", `/api/companies/${encodeURIComponent(id)}`, patch),
   patchSource: (id, patch) => send("PATCH", `/api/sources/${encodeURIComponent(id)}`, patch),
   sweep: () => send("POST", "/api/sweep"),
+
+  pull: () => send("POST", "/api/pull"),
+  pullIfStale: () => send("POST", "/api/pull/if-stale"),
+  pullStatus: () => send("GET", "/api/pull"),
+  detectAts: (id) => send("POST", `/api/companies/${encodeURIComponent(id)}/detect`),
 };

@@ -15,6 +15,7 @@ import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
 import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
+import { createPuller, summarize, atsSource } from "../src/ingest/pull.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -541,6 +542,115 @@ check("ghi kết quả kéo: last_new_at chỉ đổi khi có tin mới; setComp
   C.markSourcePull(db, "s1", { added: 2, count: 5 });
   const s = C.listSources(db).find((x) => x.id === "s1");
   ok(s.lastPull && s.lastNewAt, "nguồn: ghi được");
+});
+
+/* ============================ bước 2: kéo ============================ */
+
+function atsCompany(db, name, platform, token) {
+  const { company } = C.addCompany(db, { name });
+  return C.setCompanyAts(db, company.id, { platform, token });
+}
+const feedOf = (items, etag = null) => ({ items: items.map((it) => ({ adLanguage: "en", ...it })), total: items.length, etag });
+
+await checkAsync("kéo: mọi tin qua ingest + luật; số feed/giữ/ngoài phạm vi ghi lại; nguồn lỗi không chặn nguồn khác", async () => {
+  const db = openDb(":memory:");
+  const wolt = atsCompany(db, "Wolt", "greenhouse", "wolt");
+  const dead = atsCompany(db, "Dead Co", "lever", "dead");
+  const acme = atsCompany(db, "Acme", "ashby", "acme");
+  const fetchAts = async (platform, token) => {
+    if (token === "dead") throw new Error("HTTP 500");
+    if (token === "wolt") return feedOf([
+      { title: "Backend Engineer", location: "Helsinki, Finland", url: "https://w/1" },
+      { title: "Sales Manager", location: "Helsinki", url: "https://w/2" },
+      { title: "Backend Engineer", location: "Berlin", url: "https://w/3" }, // trùng fingerprint, ngoài phạm vi
+      { title: "iOS Engineer", location: "Berlin", url: "https://w/4" },
+    ]);
+    return feedOf([{ title: "Data Engineer", location: null, url: "https://a/1" }]);
+  };
+  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  eq(p.start().started, true, "bắt đầu");
+  eq(p.start().started, false, "đang chạy thì không chạy chồng");
+  ok(p.status().running, "running");
+  const s = await p.wait();
+  ok(!s.running && s.finishedAt, "đã xong");
+  const byName = Object.fromEntries(s.results.map((r) => [r.name, r]));
+  eq([byName.Wolt.total, byName.Wolt.kept, byName.Wolt.dropped, byName.Wolt.added, byName.Wolt.auto], [4, 2, 2, 2, 1], "Wolt: feed/giữ/ngoài/mới/luật");
+  eq(byName["Dead Co"].error, "HTTP 500", "nguồn lỗi ghi lỗi");
+  eq([byName.Acme.total, byName.Acme.kept, byName.Acme.added], [1, 1, 1], "Acme: location trống vẫn giữ, nguồn sau nguồn lỗi vẫn chạy");
+  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 3, "3 tin vào DB");
+  eq(state(db, job(db, one(db, "SELECT id FROM jobs WHERE title = 'Sales Manager'").id).id), ["killed", "rule", "r_senior_hard"], "luật chạy trên tin ATS (manager khớp trước sales)");
+  const j = J.listJobs(db).find((x) => x.title === "Backend Engineer");
+  eq(j.channels, ["Trang công ty"], "kênh = Trang công ty");
+  const cw = C.getCompany(db, wolt.id);
+  eq([cw.pullTotal, cw.pullCount, cw.lastError], [4, 2, null], "ghi vào companies");
+  ok(cw.lastNewAt, "có tin mới → last_new_at");
+  eq(C.getCompany(db, dead.id).lastError, "HTTP 500", "companies.last_error");
+  ok(C.getCompany(db, dead.id).lastPull, "nguồn lỗi vẫn ghi last_pull");
+  const settings = C.getSettings(db);
+  ok(settings.lastPull && settings.lastPullResult.results.length === 3, "settings.last_pull + kết quả");
+  eq(s.results, settings.lastPullResult.results, "status sau khi xong đọc từ settings");
+  ok(summarize(s.results).includes("3 tin mới") && summarize(s.results).includes("1 nguồn lỗi") && summarize(s.results).includes("2 ngoài phạm vi"), summarize(s.results));
+  eq(C.getCompany(db, acme.id).ats, "ashby", "không đụng cấu hình");
+  invariants(db);
+});
+
+await checkAsync("kéo lại: 304 không đụng gì; tin biến khỏi feed → closed_at; quay lại → mở lại; không đổi status", async () => {
+  const db = openDb(":memory:");
+  const wolt = atsCompany(db, "Wolt", "greenhouse", "wolt");
+  let feed = feedOf([{ title: "Backend Engineer", location: "Helsinki" }, { title: "Data Engineer", location: "Helsinki" }], "v1");
+  const fetchAts = async (platform, token, { etag }) => (etag === feed.etag ? { notModified: true, etag } : feed);
+  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  p.start(); await p.wait();
+  const be = one(db, "SELECT id FROM jobs WHERE title = 'Backend Engineer'").id;
+  J.decide(db, be, "queue");
+  eq(C.getCompany(db, wolt.id).atsEtag, "v1", "etag lưu lại");
+
+  p.start(); const s2 = await p.wait();
+  eq([s2.results[0].notModified, s2.results[0].total, s2.results[0].kept, s2.results[0].added], [true, 2, 2, 0], "304: giữ số cũ, không tin mới");
+  const firstNew = C.getCompany(db, wolt.id).lastNewAt;
+
+  feed = feedOf([{ title: "Data Engineer", location: "Helsinki" }], "v2");
+  p.start(); const s3 = await p.wait();
+  eq(s3.results[0].closed, 1, "một tin đóng");
+  ok(job(db, be).closed_at, "closed_at được ghi");
+  eq(job(db, be).status, "queue", "status không đổi");
+  eq(J.getJob(db, be).closedAt, job(db, be).closed_at, "API trả closedAt");
+  eq(C.getCompany(db, wolt.id).lastNewAt, firstNew, "không tin mới → last_new_at giữ nguyên");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n, 3, "đóng/mở không ghi event");
+
+  feed = feedOf([{ title: "Backend Engineer", location: "Helsinki" }, { title: "Data Engineer", location: "Helsinki" }], "v3");
+  p.start(); await p.wait();
+  eq(job(db, be).closed_at, null, "xuất hiện lại → mở lại");
+  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 2, "không tạo job mới");
+  eq(J.markClosed(db, "ats:nope:x", []), { closed: 0, reopened: 0 }, "nguồn lạ không đụng ai");
+  invariants(db);
+});
+
+await checkAsync("runIfStale: chưa kéo → kéo; vừa kéo → không; quá 12 tiếng → kéo; đang chạy → không", async () => {
+  const db = openDb(":memory:");
+  let block;
+  const fetchAts = () => new Promise((res) => { block = () => res(feedOf([])); });
+  atsCompany(db, "Wolt", "greenhouse", "wolt");
+  const p = createPuller(db, { fetchAts, gapMs: 0 });
+  eq(p.runIfStale().started, true, "chưa kéo lần nào → kéo");
+  eq(p.runIfStale().started, false, "đang chạy → không");
+  block(); await p.wait();
+  eq(p.runIfStale().started, false, "vừa kéo → không");
+  C.setSetting(db, "last_pull", new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString());
+  eq(p.runIfStale().started, true, "13 tiếng → kéo");
+  block(); await p.wait();
+  eq(atsSource({ ats: "greenhouse", atsToken: "wolt" }).source, "ats:greenhouse:wolt", "source key");
+});
+
+await checkAsync("công ty manual hoặc chưa dò không được kéo", async () => {
+  const db = openDb(":memory:");
+  C.addCompany(db, { name: "NoAts" });
+  atsCompany(db, "Manual Co", "manual", null);
+  let calls = 0;
+  const p = createPuller(db, { fetchAts: async () => { calls++; return feedOf([]); }, gapMs: 0 });
+  p.start();
+  await p.wait();
+  eq(calls, 0, "không gọi feed nào");
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

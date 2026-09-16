@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "./api.js";
 import { norm } from "../core/dedupe.js";
 import { SEED_COMPANIES } from "../core/seed.js";
+import { summarize } from "../ingest/pull.js";
 
 /* ============================================================
    Bàn phân loại — job pipeline (bản local)
@@ -29,6 +30,7 @@ const ymd = (d) => new Date(d).toLocaleDateString("sv-SE");
 const today = () => ymd(Date.now());
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 const ageDays = (iso) => daysBetween(ymd(iso), today());
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" }) : null);
 
 /* ============================= APP ============================= */
 export default function App() {
@@ -38,6 +40,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [loadErr, setLoadErr] = useState("");
   const [toast, setToast] = useState("");
+  const [pull, setPull] = useState(null);
 
   const reload = useCallback(async () => {
     const [j, rules, companies, sources, settings] = await Promise.all([
@@ -62,9 +65,13 @@ export default function App() {
         const { moved } = await api.archiveStale();
         const s = await reload();
         setReady(true);
+        // Tự kéo nếu lần gần nhất quá 12 tiếng — cùng cơ chế với sao lưu, server quyết, không có lịch.
+        const p = await api.pullIfStale();
+        setPull(p);
         const notes = [];
         if (moved) notes.push(`${moved} tin nằm trong thùng quá ${s.maybeTTL} ngày đã chuyển sang Lưu trữ`);
         if (s.backupError) notes.push(`Sao lưu thất bại: ${s.backupError}`);
+        if (p.started) notes.push("Quá 12 tiếng chưa kéo — đang kéo nguồn ở nền");
         if (notes.length) setToast(notes.join(" · "));
       } catch (e) {
         setLoadErr("Không kết nối được server. Chạy npm run ui rồi tải lại trang.");
@@ -77,6 +84,37 @@ export default function App() {
     const t = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  /* Đang kéo: hỏi server mỗi 2 giây và tải lại tin, nên Hộp đến đầy dần. Xong thì dừng hỏi và toast.
+     Vòng hỏi chỉ sống khi đang kéo — không phải scheduler. */
+  useEffect(() => {
+    if (!pull?.running) return;
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const p = await api.pullStatus();
+        if (!alive) return;
+        setPull(p);
+        await reload();
+        if (!p.running) setToast(`Kéo xong: ${summarize(p.results || [])}`);
+      } catch (e) { if (alive) setToast(`Mất liên lạc khi kéo: ${e.message}`); }
+    }, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, [pull?.running, reload]);
+
+  const startPull = useCallback(async () => {
+    try {
+      const p = await api.pull();
+      setPull(p);
+      if (!p.started) setToast("Đang kéo rồi, chờ xong.");
+    } catch (e) { fail(e); }
+  }, [fail]);
+
+  const detectAts = useCallback(async (id) => {
+    const r = await api.detectAts(id);
+    setConf((c) => ({ ...c, companies: c.companies.map((x) => (x.id === id ? r.company : x)) }));
+    return r.result;
+  }, []);
 
   const counts = useMemo(() => {
     const m = {};
@@ -237,9 +275,9 @@ export default function App() {
               rules={conf.rules} />
           )}
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
-          {view === "find" && <Find ingest={ingest} />}
+          {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
           {view === "companies" && <Companies list={conf.companies} jobs={jobs} add={addCompany}
-            seed={seedCompanies} patch={patchCompany} />}
+            seed={seedCompanies} patch={patchCompany} detect={detectAts} setToast={setToast} />}
           {view === "sources" && <Sources sources={conf.sources} toggle={toggleSource} jobs={jobs} />}
           {view === "rules" && <Rules rules={conf.rules} jobs={jobs} toggleRule={toggleRule} editRule={editRule}
             addRule={addRule} rerun={rerun} />}
@@ -303,6 +341,7 @@ function Triage({ jobs, move, undo }) {
           <span className="srcLbl">Thấy ở</span>
           {channels(job).map((c) => <span key={c} className="chip">{c}</span>)}
           {isEarly(job) && <span className="chip early">chưa lên board — ít cạnh tranh</span>}
+          {job.closedAt && <span className="chip closed">đã đóng {ymd(job.closedAt)}</span>}
         </div>
         {job.note && <p className="cardNote">{job.note}</p>}
         {job.url && <a className="cardLink" href={job.url} target="_blank" rel="noreferrer">Mở tin gốc</a>}
@@ -379,6 +418,7 @@ function BinList({ bin, jobs: all, move, rules }) {
             <div className="rowMeta">
               {channels(j).map((c) => <span key={c} className="chip">{c}</span>)}
               {isEarly(j) && <span className="chip early">chưa lên board</span>}
+              {j.closedAt && <span className="chip closed">đã đóng {ymd(j.closedAt)}</span>}
               {j.location && <span>{j.location}</span>}
               {j.adLanguage === "fi" && <span className="tagFi">tiếng Phần Lan</span>}
               <span>{ymd(j.foundAt)}</span>
@@ -448,8 +488,9 @@ function Sweep({ jobs, move, conf, markSweep }) {
 }
 
 /* ========================= FIND ========================= */
-/* Bước 1 chỉ có dán tay. Chế độ "Tự tìm" của bản artifact gọi Anthropic API — chưa được làm. */
-function Find({ ingest }) {
+/* Kéo nguồn đã cấu hình (ATS của công ty, email alert) + dán tay.
+   Chế độ "Tự tìm" bằng web search của bản artifact vẫn chưa làm. */
+function Find({ ingest, pull, startPull, conf }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [raw, setRaw] = useState("");
@@ -482,9 +523,66 @@ function Find({ ingest }) {
     setBusy(false);
   };
 
+  const atsCount = conf.companies.filter((c) => c.ats && c.ats !== "manual").length;
+  const results = pull?.results || [];
+
   return (
     <div className="pane">
       <h2>Tìm job</h2>
+
+      <div className="pullBox">
+        <div className="pullHead">
+          <button className="primary" onClick={startPull} disabled={!!pull?.running}>
+            {pull?.running ? "Đang kéo…" : "Kéo ngay"}
+          </button>
+          <span className="dim">
+            {pull?.lastPull ? <>Kéo gần nhất: <b>{fmtTime(pull.lastPull)}</b></> : "Chưa kéo lần nào"}
+            {" · "}{atsCount} công ty có ATS
+          </span>
+        </div>
+        {pull?.error && <p className="err">Lần kéo gần nhất hỏng: {pull.error}</p>}
+        {!atsCount && (
+          <p className="advice">
+            Chưa có công ty nào dò được ATS. Sang tab Công ty, điền link trang tuyển dụng rồi bấm “Dò ATS”.
+            Mở app quá 12 tiếng kể từ lần kéo trước thì app tự kéo, không cần nhớ.
+          </p>
+        )}
+        {results.length > 0 && (
+          <table className="yield">
+            <thead>
+              <tr><th>Nguồn</th><th>Feed</th><th>Giữ</th><th>Ngoài phạm vi</th><th>Mới</th><th>Luật</th><th>Trùng</th><th>Đóng</th></tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const blind = r.kind === "ats" && !r.error && r.total > 0 && r.kept === 0;
+                return (
+                  <tr key={i} className={r.error ? "bad" : blind ? "thin" : ""}>
+                    <td>{r.name}{r.platform ? <span className="dim"> · {r.platform}</span> : ""}
+                      {r.error && <div className="errSm">{r.error}</div>}
+                      {blind && <div className="errSm">0 giữ trên {r.total} tin: định dạng địa điểm của họ không khớp danh sách lọc, không phải họ không tuyển ở Phần Lan.</div>}
+                    </td>
+                    <td>{r.kind === "ats" ? r.total : ""}{r.notModified ? <span className="dim"> ={""}</span> : ""}</td>
+                    <td>{r.kind === "ats" ? r.kept : ""}</td>
+                    <td>{r.kind === "ats" ? r.dropped : ""}</td>
+                    <td>{r.added}</td>
+                    <td>{r.auto}</td>
+                    <td>{r.dup}</td>
+                    <td>{r.closed || ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {results.length > 0 && (
+          <p className="dim small">
+            Lọc địa điểm theo: <code>{conf.pullLocations}</code>. Đây là chỗ duy nhất tin bị bỏ trước khi vào DB, nên số “ngoài phạm vi” luôn hiện ở đây.
+            “=” nghĩa là feed không đổi từ lần trước.
+          </p>
+        )}
+      </div>
+
+      <h3 className="grp">Dán hàng loạt</h3>
       <p className="advice">Mỗi dòng một tin: <code>Chức danh | Công ty | Địa điểm | Link</code></p>
       <label className="fld">
         <span>Đợt này lấy từ đâu</span>
@@ -505,8 +603,22 @@ function Find({ ingest }) {
 /* ========================= COMPANIES ========================= */
 const TIERS = [["", "chưa xếp"], ["a", "A — rất muốn"], ["b", "B — hợp lý"], ["c", "C — mở"], ["consult", "Consultancy"]];
 
-function Companies({ list, jobs, add, seed, patch }) {
+const ATS_LABEL = { greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", recruitee: "Recruitee", smartrecruiters: "SmartRecruiters", workable: "Workable", personio: "Personio", teamtailor: "Teamtailor" };
+
+function Companies({ list, jobs, add, seed, patch, detect, setToast }) {
   const [name, setName] = useState("");
+  const [detecting, setDetecting] = useState(null);
+
+  const runDetect = async (c) => {
+    setDetecting(c.id);
+    try {
+      const r = await detect(c.id);
+      setToast(r.platform === "manual"
+        ? `${c.name}: không dò ra ATS (${r.error}). Để email alert lo.`
+        : `${c.name}: ${ATS_LABEL[r.platform] || r.platform} · ${r.total} tin trong feed${r.guessed ? " (đoán từ tên, đã xác nhận)" : ""}`);
+    } catch (e) { setToast(`Dò ATS thất bại: ${e.message}`); }
+    setDetecting(null);
+  };
 
   const seen = useMemo(() => {
     const m = new Map();
@@ -548,8 +660,21 @@ function Companies({ list, jobs, add, seed, patch }) {
                 onChange={(e) => patch(c.id, { url: e.target.value })} />
               {c.url && <a href={c.url} target="_blank" rel="noreferrer">mở</a>}
             </div>
+            <div className="rowMeta">
+              {!c.ats && <span className="dim">chưa dò ATS</span>}
+              {c.ats === "manual" && <span className="tagRule">không có ATS · email alert lo</span>}
+              {c.ats && c.ats !== "manual" && <span className="chip">{ATS_LABEL[c.ats] || c.ats} · {c.atsToken}</span>}
+              {c.lastPull && <span>kéo {fmtTime(c.lastPull)}</span>}
+              {c.pullTotal != null && <span>{c.pullTotal} tin · {c.pullCount} giữ</span>}
+              {c.lastNewAt && <span>tin mới gần nhất {ymd(c.lastNewAt)}</span>}
+              {c.lastError && <span className="errSm">lỗi: {c.lastError}</span>}
+            </div>
           </div>
           <div className="rowActs">
+            <button onClick={() => runDetect(c)} disabled={detecting === c.id || !c.url}
+              title={c.url ? "" : "Điền link trang tuyển dụng trước"}>
+              {detecting === c.id ? "Đang dò…" : c.ats ? "Dò lại ATS" : "Dò ATS"}
+            </button>
             <select value={c.tier} onChange={(e) => patch(c.id, { tier: e.target.value })}>
               {TIERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
@@ -837,6 +962,14 @@ border-radius:5px;cursor:pointer;font-size:13px}
 .tagFi{background:#EAE2F2;padding:1px 6px;border-radius:3px}
 .chip{background:#DCE6EE;color:#20486B;padding:1px 8px;border-radius:10px;font-size:12px;white-space:nowrap}
 .chip.early{background:#DFEBDC;color:#2C5A36}
+.chip.closed{background:#EADADA;color:#7A2E2E}
+.pullBox{display:flex;flex-direction:column;gap:10px;background:var(--surface);border:1px solid var(--line);
+border-radius:6px;padding:14px 16px}
+.pullHead{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.pullHead .primary{align-self:center}
+.errSm{color:#9A2C1E;font-size:12px}
+.small{font-size:12.5px;margin:0}
+.yield tr.bad td{color:#9A2C1E}
 .srcLine{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}
 .srcLbl{font-size:13px;color:var(--muted)}
 .filterRow{display:flex;gap:6px;flex-wrap:wrap}

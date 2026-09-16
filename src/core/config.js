@@ -101,6 +101,7 @@ const toCompany = (c) => ({
   note: c.note ?? "",
   ats: c.ats,
   atsToken: c.ats_token,
+  atsEtag: c.ats_etag,
   lastPull: c.last_pull,
   lastNewAt: c.last_new_at,
   pullCount: c.pull_count,

@@ -7,7 +7,9 @@
   },
   "scripts": {
     "ui": "node src/server/api.js",
-    "check": "node scripts/check.js"
+    "check": "node scripts/check.js",
+    "pull": "node src/ingest/pull.js",
+    "detect-ats": "node src/ingest/detect-ats.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
