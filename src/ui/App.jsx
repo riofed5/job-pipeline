@@ -30,6 +30,15 @@ const ymd = (d) => new Date(d).toLocaleDateString("sv-SE");
 const today = () => ymd(Date.now());
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 const ageDays = (iso) => daysBetween(ymd(iso), today());
+/* Phát hiện nguồn chết (SPEC §4): đã bật/đã kéo mà 7 ngày không có tin MỚI. Nhiều khả năng parser gãy,
+   không phải thị trường im. Chưa từng có tin mới thì tính từ lần kéo đầu. */
+const DEAD_DAYS = 7;
+const deadFor = (x) => {
+  if (!x.lastPull) return null;
+  const since = x.lastNewAt || x.firstPull || x.lastPull;
+  const d = ageDays(since);
+  return d >= DEAD_DAYS ? d : null;
+};
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" }) : null);
 
 /* ============================= APP ============================= */
@@ -668,6 +677,9 @@ function Companies({ list, jobs, add, seed, patch, detect, setToast }) {
               {c.pullTotal != null && <span>{c.pullTotal} tin · {c.pullCount} giữ</span>}
               {c.lastNewAt && <span>tin mới gần nhất {ymd(c.lastNewAt)}</span>}
               {c.lastError && <span className="errSm">lỗi: {c.lastError}</span>}
+              {c.ats && c.ats !== "manual" && deadFor(c) && (
+                <span className="warnLine">{deadFor(c)} ngày không có tin mới từ feed. Bấm “Dò lại ATS” để chắc token còn đúng.</span>
+              )}
             </div>
           </div>
           <div className="rowActs">
@@ -690,6 +702,7 @@ const KINDS = { board: "Board đa ngành", tech: "Board tech / startup", agent: 
 
 function Sources({ sources, toggle, jobs }) {
   const done = sources.filter((s) => s.alert).length;
+  const dead = sources.filter((s) => s.alert && deadFor(s));
 
   const yieldRows = useMemo(() => {
     const m = new Map();
@@ -708,6 +721,13 @@ function Sources({ sources, toggle, jobs }) {
   return (
     <div className="pane">
       <h2>Nguồn</h2>
+
+      {dead.length > 0 && (
+        <p className="advice warnBox">
+          <b>{dead.length} nguồn đang bật alert mà {DEAD_DAYS} ngày không ra tin mới:</b> {dead.map((s) => s.name).join(", ")}.
+          Đây là kiểu hỏng nguy hiểm nhất — hệ thống trông vẫn chạy trong khi đã mù một mắt.
+        </p>
+      )}
 
       {yieldRows.length > 0 && (
         <>
@@ -748,13 +768,23 @@ function Sources({ sources, toggle, jobs }) {
       {Object.keys(KINDS).map((k) => (
         <div key={k}>
           <h3 className="grp">{KINDS[k]}</h3>
-          {sources.filter((s) => s.kind === k).map((s) => (
-            <label key={s.id} className="srcRow">
-              <input type="checkbox" checked={s.alert} onChange={() => toggle(s.id, !s.alert)} />
-              <span className="srcName">{s.name}</span>
-              <a href={s.url} target="_blank" rel="noreferrer">{s.url.replace(/^https?:\/\//, "")}</a>
-            </label>
-          ))}
+          {sources.filter((s) => s.kind === k).map((s) => {
+            const dead = s.alert ? deadFor(s) : null;
+            return (
+              <label key={s.id} className={"srcRow" + (dead ? " dead" : "")}>
+                <input type="checkbox" checked={s.alert} onChange={() => toggle(s.id, !s.alert)} />
+                <span className="srcName">{s.name}
+                  {s.lastPull && <span className="srcMeta">
+                    {" · "}kéo {fmtTime(s.lastPull)}
+                    {s.lastNewAt ? ` · tin mới gần nhất ${ymd(s.lastNewAt)}` : " · chưa có tin mới nào"}
+                  </span>}
+                  {dead && <span className="warnLine">{dead} ngày không có tin mới. Alert của {s.name} có thể đã tắt, mail lọt filter, hoặc parser gãy — kiểm hộp thư trước khi tin là thị trường im.</span>}
+                  {s.lastError && <span className="errSm">lỗi: {s.lastError}</span>}
+                </span>
+                <a href={s.url} target="_blank" rel="noreferrer">{s.url.replace(/^https?:\/\//, "")}</a>
+              </label>
+            );
+          })}
         </div>
       ))}
       <p className="advice">
@@ -1018,6 +1048,10 @@ background:none;font-size:12.5px;min-width:230px}
 border:1px solid var(--line);border-radius:6px;padding:9px 12px;cursor:pointer}
 .srcName{flex:1;font-weight:500}
 .srcRow a{font-size:12.5px;color:var(--muted)}
+.srcRow.dead{border-color:var(--amber)}
+.srcMeta{font-weight:400;font-size:12.5px;color:var(--muted)}
+.warnLine{display:block;font-weight:400;font-size:12.5px;color:var(--amber);margin-top:2px}
+.advice.warnBox{border-left-color:var(--amber);background:#FBF3E4}
 
 .ruleCard{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:13px 15px;
 display:flex;flex-direction:column;gap:9px}
