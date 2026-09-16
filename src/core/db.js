@@ -108,6 +108,11 @@ ALTER TABLE sources ADD COLUMN first_pull TEXT;
 ALTER TABLE companies ADD COLUMN first_pull TEXT;
 `;
 
+/* v4 — ats_candidate: kết quả dò từ link MÁY đoán. Chỉ người duyệt mới thành ats. JSON {platform, token, total, url, at, error}. */
+const SCHEMA_V4 = `
+ALTER TABLE companies ADD COLUMN ats_candidate TEXT;
+`;
+
 const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V1);
@@ -126,6 +131,9 @@ const MIGRATIONS = [
   },
   (db) => {
     db.exec(SCHEMA_V3);
+  },
+  (db) => {
+    db.exec(SCHEMA_V4);
   },
 ];
 

@@ -654,6 +654,25 @@ await checkAsync("công ty manual hoặc chưa dò không được kéo", async 
   eq(calls, 0, "không gọi feed nào");
 });
 
+check("ứng viên ATS: link máy đoán chỉ ghi ats_candidate; Xác nhận → ats; Sai → bỏ, ats giữ nguyên", () => {
+  const db = openDb(":memory:");
+  const { company } = C.addCompany(db, { name: "Knowit" });
+  C.setCompanyCandidate(db, company.id, { platform: "greenhouse", token: "udacity", total: 17, url: "https://www.udacity.com/" });
+  let c = C.getCompany(db, company.id);
+  eq([c.ats, c.atsCandidate.platform, c.atsCandidate.token], [null, "greenhouse", "udacity"], "ứng viên không đụng ats");
+  ok(c.atsCandidate.at, "có thời điểm");
+  c = C.resolveCandidate(db, company.id, false);
+  eq([c.ats, c.atsCandidate], [null, null], "Sai → bỏ ứng viên, ats vẫn NULL");
+  C.setCompanyCandidate(db, company.id, { platform: "workable", token: "knowit", total: 3 });
+  c = C.resolveCandidate(db, company.id, true);
+  eq([c.ats, c.atsToken, c.atsCandidate], ["workable", "knowit", null], "Xác nhận → ats");
+  let threw = false;
+  try { C.resolveCandidate(db, company.id, true); } catch (e) { threw = e.status === 400; }
+  ok(threw, "không có ứng viên thì 400");
+  C.setCompanyCandidate(db, company.id, { platform: "manual", error: "không thấy" });
+  eq(C.resolveCandidate(db, company.id, true).ats, "manual", "xác nhận manual cũng là câu trả lời");
+});
+
 /* ============================ bước 3: IMAP ============================ */
 
 check("khóa mail: Message-ID, thiếu thì hash(from+date+subject)", () => {

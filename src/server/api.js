@@ -70,10 +70,13 @@ app.post("/api/companies/:id/detect", async (req, res) => {
   const c = config.getCompany(db, req.params.id);
   if (!c) return res.status(404).json({ error: "không có công ty này" });
   if (!c.url) return res.status(400).json({ error: "công ty chưa có link trang tuyển dụng" });
+  // Link ở đây là do người điền → ghi thẳng ats. Link máy đoán (script) chỉ được ghi ats_candidate.
   const result = await detectAts(c.url, { name: c.name });
   const company = config.setCompanyAts(db, c.id, { platform: result.platform, token: result.token ?? null });
   res.json({ company, result });
 });
+app.post("/api/companies/:id/candidate", (req, res) =>
+  res.json(config.resolveCandidate(db, req.params.id, Boolean(req.body?.accept))));
 app.patch("/api/sources/:id", (req, res) => res.json(config.patchSource(db, req.params.id, req.body)));
 app.post("/api/sweep", (req, res) => res.json(config.markSweep(db)));
 

@@ -125,6 +125,12 @@ export default function App() {
     return r.result;
   }, []);
 
+  const resolveCandidate = useCallback((id, accept) => {
+    api.resolveCandidate(id, accept)
+      .then((company) => setConf((c) => ({ ...c, companies: c.companies.map((x) => (x.id === id ? company : x)) })))
+      .catch(fail);
+  }, [fail]);
+
   const counts = useMemo(() => {
     const m = {};
     for (const b of BINS) m[b.id] = 0;
@@ -286,7 +292,7 @@ export default function App() {
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
           {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
           {view === "companies" && <Companies list={conf.companies} jobs={jobs} add={addCompany}
-            seed={seedCompanies} patch={patchCompany} detect={detectAts} setToast={setToast} />}
+            seed={seedCompanies} patch={patchCompany} detect={detectAts} resolve={resolveCandidate} setToast={setToast} />}
           {view === "sources" && <Sources sources={conf.sources} toggle={toggleSource} jobs={jobs} />}
           {view === "rules" && <Rules rules={conf.rules} jobs={jobs} toggleRule={toggleRule} editRule={editRule}
             addRule={addRule} rerun={rerun} />}
@@ -614,7 +620,7 @@ const TIERS = [["", "chưa xếp"], ["a", "A — rất muốn"], ["b", "B — h�
 
 const ATS_LABEL = { greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", recruitee: "Recruitee", smartrecruiters: "SmartRecruiters", workable: "Workable", personio: "Personio", teamtailor: "Teamtailor" };
 
-function Companies({ list, jobs, add, seed, patch, detect, setToast }) {
+function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) {
   const [name, setName] = useState("");
   const [detecting, setDetecting] = useState(null);
 
@@ -681,6 +687,17 @@ function Companies({ list, jobs, add, seed, patch, detect, setToast }) {
                 <span className="warnLine">{deadFor(c)} ngày không có tin mới từ feed. Bấm “Dò lại ATS” để chắc token còn đúng.</span>
               )}
             </div>
+            {c.atsCandidate && (
+              <div className="candidate">
+                <span className="candLbl">Ứng viên (link do máy đoán, chưa dùng):</span>
+                {c.atsCandidate.platform === "manual"
+                  ? <span>không dò ra ATS{c.atsCandidate.error ? ` · ${c.atsCandidate.error}` : ""}</span>
+                  : <span className="chip">{ATS_LABEL[c.atsCandidate.platform] || c.atsCandidate.platform} · {c.atsCandidate.token} · {c.atsCandidate.total} tin</span>}
+                {c.atsCandidate.url && <a href={c.atsCandidate.url} target="_blank" rel="noreferrer">{c.atsCandidate.url.replace(/^https?:\/\//, "")}</a>}
+                <button className="go" onClick={() => resolve(c.id, true)}>Xác nhận</button>
+                <button className="off" onClick={() => resolve(c.id, false)}>Sai</button>
+              </div>
+            )}
           </div>
           <div className="rowActs">
             <button onClick={() => runDetect(c)} disabled={detecting === c.id || !c.url}
@@ -998,6 +1015,12 @@ border-radius:6px;padding:14px 16px}
 .pullHead{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .pullHead .primary{align-self:center}
 .errSm{color:#9A2C1E;font-size:12px}
+.candidate{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin-top:6px;
+padding:6px 10px;background:#FBF3E4;border-radius:5px;border-left:2px solid var(--amber)}
+.candLbl{color:var(--amber)}
+.candidate button{background:none;border:1px solid var(--line);padding:3px 9px;border-radius:5px;cursor:pointer;font-size:12.5px}
+.candidate button.go{border-color:var(--signal);color:var(--signal)}
+.candidate button.off{color:var(--muted)}
 .small{font-size:12.5px;margin:0}
 .yield tr.bad td{color:#9A2C1E}
 .srcLine{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}

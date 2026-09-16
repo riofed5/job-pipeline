@@ -93,8 +93,11 @@ export function markSweep(db) {
 
 const TIERS = ["", "a", "b", "c", "consult"];
 
+const parseJson = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+
 const toCompany = (c) => ({
   id: c.id,
+  atsCandidate: parseJson(c.ats_candidate),
   name: c.name,
   tier: c.tier,
   url: c.careers_url ?? "",
@@ -147,6 +150,27 @@ export function setCompanyAts(db, id, { platform, token = null }) {
   const r = db.prepare("UPDATE companies SET ats = ?, ats_token = ?, ats_etag = NULL, last_error = NULL WHERE id = ?")
     .run(platform, token, id);
   if (!r.changes) throw httpError(404, "không có công ty này");
+  return getCompany(db, id);
+}
+
+/* Kết quả dò từ link máy đoán: chỉ là ứng viên, người duyệt mới thành ats. Không đụng ats hiện có. */
+export function setCompanyCandidate(db, id, candidate) {
+  const r = db.prepare("UPDATE companies SET ats_candidate = ? WHERE id = ?")
+    .run(candidate ? JSON.stringify({ ...candidate, at: now() }) : null, id);
+  if (!r.changes) throw httpError(404, "không có công ty này");
+  return getCompany(db, id);
+}
+
+/* Người duyệt ứng viên. accept → ats = ứng viên (manual cũng là một câu trả lời: không có ATS, email lo).
+   reject → bỏ ứng viên, ats giữ nguyên (thường là NULL) để điền link rồi dò lại. */
+export function resolveCandidate(db, id, accept) {
+  const c = getCompany(db, id);
+  if (!c) throw httpError(404, "không có công ty này");
+  if (!c.atsCandidate) throw httpError(400, "công ty này không có ứng viên ATS");
+  db.transaction(() => {
+    if (accept) setCompanyAts(db, id, { platform: c.atsCandidate.platform, token: c.atsCandidate.token ?? null });
+    db.prepare("UPDATE companies SET ats_candidate = NULL WHERE id = ?").run(id);
+  })();
   return getCompany(db, id);
 }
 

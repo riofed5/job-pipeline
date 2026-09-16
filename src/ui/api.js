@@ -50,4 +50,5 @@ export const api = {
   pullIfStale: () => send("POST", "/api/pull/if-stale"),
   pullStatus: () => send("GET", "/api/pull"),
   detectAts: (id) => send("POST", `/api/companies/${encodeURIComponent(id)}/detect`),
+  resolveCandidate: (id, accept) => send("POST", `/api/companies/${encodeURIComponent(id)}/candidate`, { accept }),
 };

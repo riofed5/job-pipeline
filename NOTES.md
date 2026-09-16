@@ -81,3 +81,10 @@ Bốn commit: detect-ats + ats, pull + UI, imap, cảnh báo nguồn chết. `np
 - Parser mail dùng `claude-opus-5` (giá 5 $/25 $ mỗi triệu token). Một mail alert ~5–10k token → dưới 0,1 $ mỗi mail. Đổi bằng `CLAUDE_MODEL` trong `.env` nếu muốn rẻ hơn (`claude-sonnet-5`: 2 $/10 $).
 
 **Đã thấy khi kéo thật (Wolt, Greenhouse)**: feed 242 tin, giữ 26 sau lọc địa điểm, 19 bị luật xử lý. "Remote" trong danh sách lọc cho lọt "Krakow, Poland; Remote" — đúng như đã chốt, luật địa điểm lo.
+
+## Dò ATS lần đầu — 2026-09-16, sau khi duyệt bảng
+
+- Link do máy đoán từ tên **không được ghi thẳng `ats`** nữa: kết quả vào `ats_candidate`, tab Công ty có Xác nhận / Sai. Ba lần sai của run đầu: Knowit → udacity.com (redirect), OP → oceanpacific.com, KONE → trang 404. Nokia, Nordea, KONE, Kesko, Elisa, CGI: không dò lại — tập đoàn lớn dùng Workday hoặc SAP, ngoài phạm vi, đi đường email.
+- **Aiven**: trang tin lẻ nhúng Greenhouse. Cách dò tiếp: mở một trang `aiven.io/careers/job/...?gh_jid=...`, tìm script `boards.greenhouse.io/embed/job_app?for=<token>` hoặc `job_board/js?for=<token>`. Chưa làm.
+- **SmartRecruiters** trả tối đa `limit=100`; Konecranes đúng 100 tin nên feed thật có thể nhiều hơn. Cần phân trang bằng `offset` trong `ats.js`. TietoEVRY ra `smartrecruiters:my-applications` với 0 tin — token rác lấy từ link HTML, ứng viên đó là Sai.
+- Script dò cần **log giờ bắt đầu và thời gian từng công ty**; run đầu chỉ có tổng (46 công ty ≈ 30 phút, ~40 giây/công ty).
