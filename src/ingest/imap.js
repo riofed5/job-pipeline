@@ -55,17 +55,34 @@ export function mailText({ html, text }) {
 
 /* ---------------------------- Claude ---------------------------- */
 
-const INSTRUCTIONS = `You extract job postings from a job-alert email sent by a job board (LinkedIn, Duunitori, Oikotie, The Hub, Jobly, EngRadar, ...).
-The email is given below as plain text; links appear as "anchor text (https://url)".
+const SYSTEM = `You extract job postings from job-alert emails sent by job boards (LinkedIn, Duunitori, Oikotie, The Hub, Jobly, EngRadar, ...).
+The email text is given as plain text; links appear as "anchor text (https://url)".
 Return every job posting that appears in the email. For each: the job title, the employer/company name, the location as written, and the URL of the link that leads to that posting (a tracking link is fine; keep it exactly as written).
-Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.
-Answer with ONLY a JSON object, no prose, no code fence, of this exact shape:
-{"jobs":[{"title":"","company":"","location":"","url":""}]}
+Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.`;
 
-EMAIL:
-`;
+const SCHEMA = {
+  type: "object",
+  properties: {
+    jobs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          company: { type: "string" },
+          location: { type: "string" },
+          url: { type: "string" },
+        },
+        required: ["title", "company", "location", "url"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["jobs"],
+  additionalProperties: false,
+};
 
-/* Lấy object JSON đầu tiên trong câu trả lời: chịu được chữ thừa hoặc rào \`\`\` quanh nó. */
+/* Lấy object JSON đầu tiên trong câu trả lời: schema đã ép, nhưng vẫn chịu được chữ thừa nếu có. */
 export function parseJobsJson(out) {
   const s = String(out ?? "");
   const a = s.indexOf("{");
@@ -76,13 +93,14 @@ export function parseJobsJson(out) {
   return parsed.jobs;
 }
 
-/* Request chỉ có model, max_tokens, messages. Không system, không output_config, không effort:
-   tách JSON từ một mail không cần gì hơn. */
+/* Không có effort: tách JSON từ một mail không cần nó ở model nào. */
 export function buildRequest(text, model) {
   return {
     model,
     max_tokens: 8000,
-    messages: [{ role: "user", content: INSTRUCTIONS + text }],
+    system: SYSTEM,
+    output_config: { format: { type: "json_schema", schema: SCHEMA } },
+    messages: [{ role: "user", content: text }],
   };
 }
 
