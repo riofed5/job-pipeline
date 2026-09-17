@@ -29,5 +29,7 @@ export function htmlToText(html, { keepLinks = false } = {}) {
   s = s.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h[1-6]|ul|ol|table|section|article|blockquote)>/gi, "\n");
   s = s.replace(/<[^>]+>/g, " ");
   s = decodeEntities(s);
+  // Đệm vô hình của preheader (U+034F, zero-width): LinkedIn nhét hàng trăm ký tự này, chỉ tốn token.
+  s = s.replace(/[\u034F\u200B-\u200D\uFEFF]/g, "");
   return s.replace(/[ \t\r\f\v]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }

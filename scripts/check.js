@@ -415,6 +415,7 @@ check("html → chữ: giữ link dạng 'chữ (url)', bỏ script, giải mã 
   ok(!t.includes("x()") && !t.includes("a{}"), "script/style phải biến mất");
   ok(!t.includes("mailto"), "mailto không thành link");
   ok(htmlToText("<a href='https://x.fi'>Job</a>").trim() === "Job", "không keepLinks thì chỉ còn chữ");
+  eq(htmlToText("<p>Hi\u034F \u034F \u200B\u200Bthere</p>"), "Hi there", "đệm vô hình của preheader bị bỏ");
 });
 
 check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", () => {
@@ -697,6 +698,16 @@ check("ứng viên ATS: link máy đoán chỉ ghi ats_candidate; Xác nhận �
   ok(c.atsCandidate.at, "có thời điểm");
   c = C.resolveCandidate(db, company.id, false);
   eq([c.ats, c.atsCandidate], [null, null], "Sai → bỏ ứng viên, ats vẫn NULL");
+  // ats đã lỡ ghi (bấm Dò ATS trên link máy đoán) rồi mới bấm Sai: ats phải về NULL, link đoán bị bỏ.
+  C.patchCompany(db, company.id, { url: "https://www.udacity.com/" });
+  C.setCompanyAts(db, company.id, { platform: "greenhouse", token: "udacity" });
+  C.setCompanyCandidate(db, company.id, { platform: "greenhouse", token: "udacity", total: 17, url: "https://www.udacity.com/", guessedLink: true });
+  c = C.resolveCandidate(db, company.id, false);
+  eq([c.ats, c.atsToken, c.atsCandidate, c.url], [null, null, null, ""], "Sai → ats NULL, token NULL, link máy đoán bị bỏ");
+  // Link do người điền thì Sai không đụng link.
+  C.patchCompany(db, company.id, { url: "https://www.knowit.fi/careers" });
+  C.setCompanyCandidate(db, company.id, { platform: "lever", token: "x", url: "https://www.knowit.fi/careers" });
+  eq(C.resolveCandidate(db, company.id, false).url, "https://www.knowit.fi/careers", "link người điền giữ nguyên");
   C.setCompanyCandidate(db, company.id, { platform: "workable", token: "knowit", total: 3 });
   c = C.resolveCandidate(db, company.id, true);
   eq([c.ats, c.atsToken, c.atsCandidate], ["workable", "knowit", null], "Xác nhận → ats");
@@ -705,6 +716,22 @@ check("ứng viên ATS: link máy đoán chỉ ghi ats_candidate; Xác nhận �
   ok(threw, "không có ứng viên thì 400");
   C.setCompanyCandidate(db, company.id, { platform: "manual", error: "không thấy" });
   eq(C.resolveCandidate(db, company.id, true).ats, "manual", "xác nhận manual cũng là câu trả lời");
+});
+
+check("killBySource: tin từ nguồn ghi nhầm công ty → killed, decided_by human, note, event; không xóa", () => {
+  const db = openDb(":memory:");
+  const src = { source: "ats:greenhouse:udacity", channel: "Trang công ty" };
+  J.ingest(db, [{ title: "Backend Engineer", company: "Knowit" }, { title: "Sales Manager", company: "Knowit" }, { title: "Data Engineer", company: "Knowit" }], src);
+  const be = one(db, "SELECT id FROM jobs WHERE title = 'Backend Engineer'").id;
+  J.decide(db, be, "queue");
+  const before = one(db, "SELECT COUNT(*) n FROM events").n;
+  eq(J.killBySource(db, src.source, "sai công ty"), { killed: 3, total: 3 }, "cả tin luật đã loại cũng chuyển sang quyết định người");
+  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 3, "không xóa");
+  eq(db.prepare("SELECT status, decided_by, note FROM jobs").all(), Array(3).fill({ status: "killed", decided_by: "human", note: "sai công ty" }), "trạng thái");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n - before, 3, "mỗi tin một event");
+  eq(J.killBySource(db, src.source, "sai công ty").killed, 0, "chạy lại không ghi event thừa");
+  eq(J.killBySource(db, "ats:nope:x", "n"), { killed: 0, total: 0 }, "nguồn lạ không đụng ai");
+  invariants(db);
 });
 
 /* ============================ bước 3: IMAP ============================ */

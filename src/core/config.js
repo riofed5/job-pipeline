@@ -162,13 +162,21 @@ export function setCompanyCandidate(db, id, candidate) {
 }
 
 /* Người duyệt ứng viên. accept → ats = ứng viên (manual cũng là một câu trả lời: không có ATS, email lo).
-   reject → bỏ ứng viên, ats giữ nguyên (thường là NULL) để điền link rồi dò lại. */
+   reject → bỏ ứng viên VÀ ats về NULL (kể cả ats đã lỡ ghi), VÀ bỏ link nếu link đó do máy đoán —
+   để lại link sai thì bấm "Dò ATS" lại ra đúng kết quả sai đó (Knowit → udacity). */
 export function resolveCandidate(db, id, accept) {
   const c = getCompany(db, id);
   if (!c) throw httpError(404, "không có công ty này");
   if (!c.atsCandidate) throw httpError(400, "công ty này không có ứng viên ATS");
   db.transaction(() => {
-    if (accept) setCompanyAts(db, id, { platform: c.atsCandidate.platform, token: c.atsCandidate.token ?? null });
+    if (accept) {
+      setCompanyAts(db, id, { platform: c.atsCandidate.platform, token: c.atsCandidate.token ?? null });
+    } else {
+      db.prepare("UPDATE companies SET ats = NULL, ats_token = NULL, ats_etag = NULL WHERE id = ?").run(id);
+      if (c.atsCandidate.guessedLink && c.atsCandidate.url && c.atsCandidate.url === c.url) {
+        db.prepare("UPDATE companies SET careers_url = NULL WHERE id = ?").run(id);
+      }
+    }
     db.prepare("UPDATE companies SET ats_candidate = NULL WHERE id = ?").run(id);
   })();
   return getCompany(db, id);

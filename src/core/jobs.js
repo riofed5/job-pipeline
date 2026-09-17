@@ -222,6 +222,23 @@ export function rerunRules(db) {
   })();
 }
 
+/* Nguồn ghi nhầm công ty (feed của công ty khác đội tên): loại mọi tin từng thấy ở nguồn đó, quyết định
+   ghi là của người, kèm note. Không xóa gì. Tin đã killed thì chỉ cập nhật note. */
+export function killBySource(db, source, note) {
+  return db.transaction(() => {
+    const at = now();
+    let killed = 0;
+    const rows = stmt(db, "SELECT j.* FROM jobs j JOIN sightings s ON s.job_id = j.id WHERE s.source = ?").all(source);
+    for (const job of rows) {
+      stmt(db, "UPDATE jobs SET note = ? WHERE id = ?").run(note, job.id);
+      if (job.status === "killed" && job.decided_by === "human") continue;
+      writeStatus(db, job, { status: "killed", decidedBy: "human", killedBy: job.killed_by, by: "human", at });
+      killed++;
+    }
+    return { killed, total: rows.length };
+  })();
+}
+
 /* Tín hiệu tin còn sống, chỉ ATS cho được: feed 200 thật mà tin từng thấy ở nguồn này không còn → closed_at.
    Xuất hiện lại → bỏ closed_at. KHÔNG đổi status, không ghi event — chỉ là nhãn để khỏi mở tin chết. */
 export function markClosed(db, source, liveFingerprints) {
