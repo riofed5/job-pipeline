@@ -62,7 +62,8 @@ export function patchRule(db, id, patch) {
 
 /* ---------------------------- cài đặt ---------------------------- */
 
-export const DEFAULT_LOCATIONS = "Finland, Suomi, Helsinki, Espoo, Vantaa, Tampere, Turku, Oulu, Jyväskylä, Remote";
+/* Cả nước, không chỉ 6 thành phố lớn. "fi" là mã nước, khớp theo token (xem ats.locationOk). */
+export const DEFAULT_LOCATIONS = "fi, Finland, Suomi, Helsinki, Espoo, Vantaa, Tampere, Turku, Oulu, Jyväskylä, Hyvinkää, Lahti, Kuopio, Lappeenranta, Joensuu, Vaasa, Pori, Seinäjoki, Salo, Kokkola, Rovaniemi, Remote";
 
 export function getSettings(db) {
   const m = Object.fromEntries(db.prepare("SELECT key, value FROM settings").all().map((r) => [r.key, r.value]));

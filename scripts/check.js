@@ -13,6 +13,7 @@ import { fingerprint } from "../src/core/dedupe.js";
 import { compileRules, compileTerm, evaluate } from "../src/core/rules.js";
 import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
+import { sortJobs } from "../src/ui/sort.js";
 import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 import { createPuller, atsSource } from "../src/ingest/pull.js";
@@ -288,6 +289,29 @@ check("tự lưu trữ không bao giờ đụng new, queue, applied, killed", ()
   invariants(db);
 });
 
+check("deadline: cột có, trống mặc định, danh sách trả về", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  eq(J.getJob(db, a.id).deadline, null, "trống");
+  db.prepare("UPDATE jobs SET deadline = '2026-10-01' WHERE id = ?").run(a.id); // bước 5 mới có hàm ghi
+  eq(J.listJobs(db)[0].deadline, "2026-10-01", "listJobs trả deadline");
+});
+
+check("sắp xếp thùng: mới thêm, cũ nhất, deadline gần nhất với trống xếp cuối", () => {
+  const jobs = [
+    { id: "a", foundAt: "2026-09-10T00:00:00Z", deadline: null },
+    { id: "b", foundAt: "2026-09-12T00:00:00Z", deadline: "2026-10-05" },
+    { id: "c", foundAt: "2026-09-11T00:00:00Z", deadline: "2026-09-20" },
+    { id: "d", foundAt: "2026-09-13T00:00:00Z", deadline: null },
+  ];
+  const ids = (m) => sortJobs(jobs, m).map((j) => j.id);
+  eq(ids("newest"), ["d", "b", "c", "a"], "mới thêm");
+  eq(ids("oldest"), ["a", "c", "b", "d"], "cũ nhất");
+  eq(ids("deadline"), ["c", "b", "d", "a"], "deadline gần nhất, trống cuối theo mới thêm");
+  eq(ids("gì đó lạ"), ["d", "b", "c", "a"], "chế độ lạ = mặc định");
+  eq(jobs.map((j) => j.id), ["a", "b", "c", "d"], "không đổi mảng gốc");
+});
+
 check("danh sách tin không trả description", () => {
   const db = openDb(":memory:");
   add(db, "Backend Engineer", "Wolt", { description: "JD dài…" });
@@ -458,6 +482,15 @@ check("lọc địa điểm: không phân biệt hoa thường, nhiều thành p
   eq(kept.map((x) => x.title), ["a", "b", "d", "e"], "giữ");
   eq(dropped.map((x) => x.title), ["c"], "ngoài phạm vi");
   eq(filterLocation(items, "").kept.length, 5, "danh sách trống = không lọc");
+  // Lớp mã nước: "fi" chỉ khớp khi đứng riêng làm token.
+  const code = [
+    ["Hyvinkää, fi", true], ["Espoo, FI", true], ["Remote (fi)", true], ["fi", true], ["Helsinki fi", true],
+    ["Fifth Avenue, us", false], ["Finland Street, us", false], ["Sci-fi Studio, us", true], ["Warszawa, pl, Remote", false],
+    ["Flexible within Subregion North (Finland, Sweden), se", false],
+  ];
+  for (const [loc, want] of code) eq(filterLocation([{ title: "x", location: loc }], "fi").kept.length === 1, want, `mã nước fi: "${loc}"`);
+  eq(filterLocation([{ title: "x", location: "Flexible within Subregion North (Finland, Sweden), se" }], "fi, Finland").kept.length, 1, "lớp thành phố/tên nước vẫn khớp chuỗi con");
+  eq(filterLocation([{ title: "x", location: "Hyvinkää, fi" }], "Hyvinkää").kept.length, 1, "thành phố có dấu");
 });
 
 check("đoán ngôn ngữ tin: dấu trong chức danh, hoặc JD nhiều từ Phần Lan", () => {

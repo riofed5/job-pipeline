@@ -186,12 +186,17 @@ export function parseFeed(platform, body, token) {
    Chỗ DUY NHẤT vứt tin trước khi vào DB. Vì thế pull ghi lại tổng/giữ/ngoài phạm vi để nhìn thấy được.
    Không phân biệt hoa thường; "Helsinki, Stockholm, Berlin" giữ vì một thành phố khớp; trống thì giữ. */
 
+/* Hai lớp: mục 2 chữ (fi, se) là MÃ NƯỚC, chỉ khớp khi đứng riêng làm token — sau dấu phẩy, trong ngoặc,
+   cuối chuỗi — không khớp "fi" nằm trong "Fifth" hay "Finland". Mục dài hơn khớp chuỗi con như trước. */
 export const parseLocations = (s) => String(s ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const codeRe = (code) => new RegExp(`(?<![\\p{L}\\p{N}])${esc(code)}(?![\\p{L}\\p{N}])`, "iu");
 
 export function locationOk(location, locations) {
   const loc = str(location).toLowerCase();
   if (!loc || !locations.length) return true;
-  return locations.some((l) => loc.includes(l));
+  return locations.some((l) => (l.length === 2 ? codeRe(l).test(loc) : loc.includes(l)));
 }
 
 export function filterLocation(items, locationList) {

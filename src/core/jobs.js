@@ -30,7 +30,7 @@ function stmt(db, sql) {
 /* ---------------------------- đọc ---------------------------- */
 
 // Không có description: không màn hình nào ở bàn phân loại được hiện nó.
-const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at";
+const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at, deadline";
 
 const toJob = (r, channels) => ({
   id: r.id,
@@ -47,6 +47,7 @@ const toJob = (r, channels) => ({
   decidedBy: r.decided_by,
   killedBy: r.killed_by,
   closedAt: r.closed_at,
+  deadline: r.deadline,
   channels,
 });
 

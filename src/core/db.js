@@ -113,6 +113,13 @@ const SCHEMA_V4 = `
 ALTER TABLE companies ADD COLUMN ats_candidate TEXT;
 `;
 
+/* v5 — jobs.deadline (để trống tới bước 5, enrich.js điền). Bỏ ETag ATS một lần vì bộ lọc địa điểm đổi:
+   304 sẽ bỏ qua lọc lại, mà lần này chính bộ lọc là thứ cần chạy lại. */
+const SCHEMA_V5 = `
+ALTER TABLE jobs ADD COLUMN deadline TEXT;
+UPDATE companies SET ats_etag = NULL;
+`;
+
 const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V1);
@@ -134,6 +141,9 @@ const MIGRATIONS = [
   },
   (db) => {
     db.exec(SCHEMA_V4);
+  },
+  (db) => {
+    db.exec(SCHEMA_V5);
   },
 ];
 

@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import { norm } from "../core/dedupe.js";
 import { SEED_COMPANIES } from "../core/seed.js";
 import { summarize } from "../ingest/summary.js";
+import { SORTS, sortJobs } from "./sort.js";
 
 /* ============================================================
    Bàn phân loại — job pipeline (bản local)
@@ -50,6 +51,7 @@ export default function App() {
   const [loadErr, setLoadErr] = useState("");
   const [toast, setToast] = useState("");
   const [pull, setPull] = useState(null);
+  const [sort, setSort] = useState("newest"); // dùng chung cho mọi thùng, đổi thùng không mất
 
   const reload = useCallback(async () => {
     const [j, rules, companies, sources, settings] = await Promise.all([
@@ -287,7 +289,7 @@ export default function App() {
           {view === "new" && <Triage jobs={jobs.filter((j) => j.status === "new")} move={move} undo={undo} />}
           {["queue", "maybe", "doubt", "applied", "killed", "archived"].includes(view) && (
             <BinList bin={view} jobs={jobs.filter((j) => j.status === view)} move={move}
-              rules={conf.rules} />
+              rules={conf.rules} sort={sort} setSort={setSort} />
           )}
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
           {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
@@ -385,7 +387,8 @@ function Key({ n, label, sub, tone, onClick }) {
 }
 
 /* ========================= BIN LIST ========================= */
-function BinList({ bin, jobs: all, move, rules }) {
+function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
+  const all = useMemo(() => sortJobs(unsorted, sort), [unsorted, sort]);
   const meta = BINS.find((b) => b.id === bin);
   const ruleName = (id) => (rules.find((r) => r.id === id) || {}).label || "luật không rõ";
   const [srcFilter, setSrcFilter] = useState("");
@@ -407,6 +410,12 @@ function BinList({ bin, jobs: all, move, rules }) {
       <div className="listHead">
         <h2>{meta.label}</h2>
         <span className="dim">{jobs.length} tin{srcFilter ? ` / ${all.length}` : ""}</span>
+      </div>
+      <div className="filterRow">
+        <span className="dim small">xếp theo</span>
+        {SORTS.map((s) => (
+          <button key={s.id} className={"chipBtn" + (sort === s.id ? " on" : "")} onClick={() => setSort(s.id)}>{s.label}</button>
+        ))}
       </div>
       {allSrc.length > 1 && (
         <div className="filterRow">
@@ -434,6 +443,7 @@ function BinList({ bin, jobs: all, move, rules }) {
               {channels(j).map((c) => <span key={c} className="chip">{c}</span>)}
               {isEarly(j) && <span className="chip early">chưa lên board</span>}
               {j.closedAt && <span className="chip closed">đã đóng {ymd(j.closedAt)}</span>}
+              {j.deadline && <span className={"tagDl" + (j.deadline < today() ? " past" : "")}>hạn {j.deadline}</span>}
               {j.location && <span>{j.location}</span>}
               {j.adLanguage === "fi" && <span className="tagFi">tiếng Phần Lan</span>}
               <span>{ymd(j.foundAt)}</span>
@@ -574,7 +584,7 @@ function Find({ ingest, pull, startPull, conf }) {
                   <tr key={i} className={r.error ? "bad" : blind ? "blind" : ""}>
                     <td>{r.name}{r.platform ? <span className="dim"> · {r.platform}</span> : ""}
                       {r.error && <div className="errSm">{r.error}</div>}
-                      {blind && <div className="errSm">0 giữ trên {r.total} tin: định dạng địa điểm của họ không khớp danh sách lọc, không phải họ không tuyển ở Phần Lan.</div>}
+                      {blind && <div className="errSm">0 giữ trên {r.total} tin — xem chuỗi địa điểm trong feed: có thể định dạng không khớp danh sách lọc, hoặc họ không có việc ở Phần Lan lúc này.</div>}
                     </td>
                     <td>{r.kind === "ats" ? r.total : ""}{r.notModified ? <span className="dim"> ={""}</span> : ""}</td>
                     <td>{r.kind === "ats" ? r.kept : ""}</td>
@@ -1041,6 +1051,8 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .yield tr.thin td{color:var(--muted)}
 .yield tr.thin td:first-child::after{content:" · đang ăn thời gian";color:var(--amber);font-size:11.5px}
 .tagRule{background:#DDE1E4;padding:1px 6px;border-radius:3px}
+.tagDl{background:#DDE6EE;color:var(--signal);padding:1px 6px;border-radius:3px}
+.tagDl.past{background:#EADADA;color:#7A2E2E}
 .pill{font-size:11px;padding:1px 7px;border-radius:10px}
 .pill.doubt{background:#FBF3E4;color:var(--amber)}
 .pill.maybe{background:#DDE6EE;color:var(--signal)}
