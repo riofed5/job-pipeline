@@ -47,6 +47,15 @@ export const SEED_RULES = [
     note: "Mã nước trong chuỗi địa điểm của ATS (\"Garner, us, Remote\"). Không dùng \"in\" và \"no\" vì trùng từ tiếng Anh (\"Remote in Finland\", \"no relocation\"); thay bằng india, norway.",
   },
   {
+    id: "r_openapp",
+    label: "Đơn mở, không phải vị trí cụ thể",
+    field: "title",
+    match: "open application, avoin hakemus, general application, spontaneous application",
+    action: "doubt",
+    enabled: true,
+    note: "Không có JD để đọc, không có deadline. Ngờ vực để rà soát tuần quyết, không làm ngập Hộp đến.",
+  },
+  {
     id: "r_custom",
     label: "Ngành ngoài phạm vi",
     field: "any",

@@ -120,14 +120,15 @@ ALTER TABLE jobs ADD COLUMN deadline TEXT;
 UPDATE companies SET ats_etag = NULL;
 `;
 
-/* v6 — luật mẫu r_abroad cho DB đã có (seed chỉ chạy ở v1). Bật sẵn, needs_rerun để UI nhắc chạy lại. */
-function migrateV6(db) {
-  const r = SEED_RULES.find((x) => x.id === "r_abroad");
+/* Luật mẫu thêm sau v1 cho DB đã có (seed chỉ chạy ở v1). Bật sẵn, needs_rerun để UI nhắc chạy lại. */
+function insertSeedRule(db, id) {
+  const r = SEED_RULES.find((x) => x.id === id);
   if (db.prepare("SELECT 1 FROM rules WHERE id = ?").get(r.id)) return;
   const { p } = db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM rules").get();
   db.prepare(`INSERT INTO rules (id, label, field, match, action, enabled, note, created_at, position, needs_rerun)
     VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`).run(r.id, r.label, r.field, r.match, r.action, r.note, now(), p);
 }
+const migrateV6 = (db) => insertSeedRule(db, "r_abroad");
 
 const MIGRATIONS = [
   (db) => {
@@ -160,6 +161,8 @@ const MIGRATIONS = [
     db.prepare("UPDATE rules SET match = ?, needs_rerun = 1 WHERE id = 'r_abroad' AND match = ?")
       .run("us, gb, uk, pl, de, se, dk, ca, india, norway", "us, gb, uk, pl, de, se, no, dk, in, ca");
   },
+  /* v8 — luật mẫu r_openapp: đơn mở → Ngờ vực. */
+  (db) => insertSeedRule(db, "r_openapp"),
 ];
 
 export function openDb(file) {

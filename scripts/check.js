@@ -172,6 +172,19 @@ check("luật mẫu r_abroad: bật sẵn, có ở DB mới lẫn DB cũ qua mig
   invariants(db);
 });
 
+check("luật mẫu r_openapp: đơn mở → Ngờ vực; luật loại vẫn thắng khi cả hai khớp", () => {
+  const db = openDb(":memory:");
+  const r = C.getRule(db, "r_openapp");
+  ok(r && r.enabled && r.field === "title" && r.action === "doubt", "luật mẫu có và bật");
+  eq(state(db, add(db, "Open Application", "Reaktor", { location: "Helsinki" }).id), ["doubt", "rule", "r_openapp"], "open application");
+  eq(state(db, add(db, "Avoin hakemus / ohjelmistokehittäjä", "Solita", { location: "Tampere", adLanguage: "en" }).id), ["doubt", "rule", "r_openapp"], "avoin hakemus");
+  eq(state(db, add(db, "General Application - Engineering", "Wolt", { location: "Helsinki" }).id), ["doubt", "rule", "r_openapp"], "general application");
+  eq(state(db, add(db, "Open Application", "Eficode", { location: "Philadelphia - US; Helsinki - Finland" }).id), ["killed", "rule", "r_abroad"], "kill (r_abroad) thắng doubt");
+  eq(state(db, add(db, "Application Security Engineer", "Wolt", { location: "Helsinki" }).id), ["new", null, null], "chỉ khớp cụm nguyên");
+  eq(one(db, "SELECT COUNT(*) n FROM rules WHERE id = 'r_openapp'").n, 1, "không nhân đôi");
+  invariants(db);
+});
+
 check("luật ngôn ngữ qua đường nạp", () => {
   const db = openDb(":memory:");
   const a = add(db, "Ohjelmistokehittäjä", "Solita", { adLanguage: "fi" });
