@@ -17,7 +17,7 @@ import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/inges
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 import { createPuller, atsSource } from "../src/ingest/pull.js";
 import { summarize } from "../src/ingest/summary.js";
-import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep, imapConfigured, fetchAlertMails } from "../src/ingest/imap.js";
+import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep, imapConfigured, fetchAlertMails, buildRequest, parseJobsJson } from "../src/ingest/imap.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -754,8 +754,14 @@ await checkAsync("parser Claude: gọi đúng dạng, trả JSON, lọc tin thi�
   eq(seen.init.headers["x-api-key"], "k", "key");
   eq(seen.init.headers["anthropic-version"], "2023-06-01", "version");
   eq(seen.body.model, "claude-opus-5", "model");
-  eq(seen.body.output_config.format.type, "json_schema", "ép JSON");
-  eq(seen.body.messages[0].content, "mail", "mail là user turn");
+  eq(Object.keys(seen.body).sort(), ["max_tokens", "messages", "model"], "body chỉ có model, max_tokens, messages");
+  ok(!JSON.stringify(seen.body).includes('"effort"') && !("output_config" in seen.body) && !("system" in seen.body), "không effort, không output_config, không system");
+  ok(seen.body.messages[0].content.endsWith("EMAIL:\nmail"), "hướng dẫn + mail trong một user turn");
+  eq(Object.keys(buildRequest("x", "m")).sort(), ["max_tokens", "messages", "model"], "buildRequest");
+  eq(parseJobsJson('Here you go:\n```json\n{"jobs":[{"title":"A","company":"B","location":"","url":""}]}\n```'), [{ title: "A", company: "B", location: "", url: "" }], "JSON trong rào và chữ thừa vẫn tách được");
+  let bad = "";
+  try { parseJobsJson("no json here"); } catch (e) { bad = e.message; }
+  ok(/JSON/.test(bad), "không có JSON thì ném");
   let err = "";
   try { await extractJobs("m", { apiKey: "k", fetchFn: async () => ({ ok: true, json: async () => ({ stop_reason: "refusal", content: [] }) }) }); } catch (e) { err = e.message; }
   ok(/từ chối/.test(err), `refusal: ${err}`);

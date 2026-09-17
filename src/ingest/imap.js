@@ -55,45 +55,43 @@ export function mailText({ html, text }) {
 
 /* ---------------------------- Claude ---------------------------- */
 
-const SYSTEM = `You extract job postings from job-alert emails sent by job boards (LinkedIn, Duunitori, Oikotie, The Hub, Jobly, ...).
-The email text is given as plain text; links appear as "anchor text (https://url)".
+const INSTRUCTIONS = `You extract job postings from a job-alert email sent by a job board (LinkedIn, Duunitori, Oikotie, The Hub, Jobly, EngRadar, ...).
+The email is given below as plain text; links appear as "anchor text (https://url)".
 Return every job posting that appears in the email. For each: the job title, the employer/company name, the location as written, and the URL of the link that leads to that posting (a tracking link is fine; keep it exactly as written).
-Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.`;
+Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.
+Answer with ONLY a JSON object, no prose, no code fence, of this exact shape:
+{"jobs":[{"title":"","company":"","location":"","url":""}]}
 
-const SCHEMA = {
-  type: "object",
-  properties: {
-    jobs: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          company: { type: "string" },
-          location: { type: "string" },
-          url: { type: "string" },
-        },
-        required: ["title", "company", "location", "url"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["jobs"],
-  additionalProperties: false,
-};
+EMAIL:
+`;
+
+/* Lấy object JSON đầu tiên trong câu trả lời: chịu được chữ thừa hoặc rào \`\`\` quanh nó. */
+export function parseJobsJson(out) {
+  const s = String(out ?? "");
+  const a = s.indexOf("{");
+  const b = s.lastIndexOf("}");
+  if (a === -1 || b === -1 || b < a) throw new Error("Claude không trả JSON");
+  const parsed = JSON.parse(s.slice(a, b + 1));
+  if (!Array.isArray(parsed.jobs)) throw new Error("Claude không trả mảng jobs");
+  return parsed.jobs;
+}
+
+/* Request chỉ có model, max_tokens, messages. Không system, không output_config, không effort:
+   tách JSON từ một mail không cần gì hơn. */
+export function buildRequest(text, model) {
+  return {
+    model,
+    max_tokens: 8000,
+    messages: [{ role: "user", content: INSTRUCTIONS + text }],
+  };
+}
 
 export async function extractJobs(text, { apiKey, model = DEFAULT_MODEL, fetchFn = fetch } = {}) {
   if (!apiKey) throw new Error("thiếu ANTHROPIC_API_KEY");
   const res = await fetchFn("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({
-      model,
-      max_tokens: 8000,
-      system: SYSTEM,
-      output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
-      messages: [{ role: "user", content: text }],
-    }),
+    body: JSON.stringify(buildRequest(text, model)),
     signal: AbortSignal.timeout(120_000),
   });
   const data = await res.json().catch(() => ({}));
@@ -101,9 +99,7 @@ export async function extractJobs(text, { apiKey, model = DEFAULT_MODEL, fetchFn
   if (data.stop_reason === "refusal") throw new Error("Claude từ chối mail này");
   if (data.stop_reason === "max_tokens") throw new Error("Claude bị cắt giữa chừng (max_tokens)");
   const out = (data.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("");
-  const parsed = JSON.parse(out);
-  if (!Array.isArray(parsed.jobs)) throw new Error("Claude không trả mảng jobs");
-  return parsed.jobs.map((j) => ({
+  return parseJobsJson(out).map((j) => ({
     title: String(j.title ?? "").trim(),
     company: String(j.company ?? "").trim(),
     location: String(j.location ?? "").trim() || null,
