@@ -120,6 +120,15 @@ ALTER TABLE jobs ADD COLUMN deadline TEXT;
 UPDATE companies SET ats_etag = NULL;
 `;
 
+/* v6 — luật mẫu r_abroad cho DB đã có (seed chỉ chạy ở v1). Bật sẵn, needs_rerun để UI nhắc chạy lại. */
+function migrateV6(db) {
+  const r = SEED_RULES.find((x) => x.id === "r_abroad");
+  if (db.prepare("SELECT 1 FROM rules WHERE id = ?").get(r.id)) return;
+  const { p } = db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM rules").get();
+  db.prepare(`INSERT INTO rules (id, label, field, match, action, enabled, note, created_at, position, needs_rerun)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`).run(r.id, r.label, r.field, r.match, r.action, r.note, now(), p);
+}
+
 const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V1);
@@ -145,6 +154,7 @@ const MIGRATIONS = [
   (db) => {
     db.exec(SCHEMA_V5);
   },
+  migrateV6,
 ];
 
 export function openDb(file) {

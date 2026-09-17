@@ -14,7 +14,7 @@ import { compileRules, compileTerm, evaluate } from "../src/core/rules.js";
 import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
 import { sortJobs } from "../src/ui/sort.js";
-import { parseFeed, filterLocation, guessLanguage, fetchAts } from "../src/ingest/ats.js";
+import { parseFeed, filterLocation, guessLanguage, fetchAts, hasForeignCountry } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 import { createPuller, atsSource } from "../src/ingest/pull.js";
 import { summarize } from "../src/ingest/summary.js";
@@ -153,6 +153,20 @@ check("khớp nguyên từ, ranh giới Unicode, dấu *", () => {
   for (const [m, t, want] of cases) eq(hits(m, t), want, `"${m}" trên "${t}"`);
   eq(compileTerm("*"), null, "'*' đứng một mình bị bỏ qua");
   compileTerm("(("); // không được ném lỗi
+});
+
+check("luật mẫu r_abroad: bật sẵn, có ở DB mới lẫn DB cũ qua migration, loại theo mã nước", () => {
+  const db = openDb(":memory:");
+  const r = C.getRule(db, "r_abroad");
+  ok(r && r.enabled && r.field === "location" && r.action === "kill", "luật mẫu có và bật");
+  const a = add(db, "Backend Engineer", "Konecranes", { location: "Garner, us, Remote" });
+  eq(state(db, a.id), ["killed", "rule", "r_abroad"], "us → loại");
+  const b = add(db, "Data Engineer", "Konecranes", { location: "Hyvinkää, fi" });
+  eq(state(db, b.id), ["new", null, null], "fi → giữ");
+  const c = add(db, "SRE", "Konecranes", { location: "Remote in Finland" });
+  eq(state(db, c.id), ["killed", "rule", "r_abroad"], "'in' khớp nguyên từ — biết trước, tắt luật thì hồi sinh");
+  eq(one(db, "SELECT COUNT(*) n FROM rules WHERE id = 'r_abroad'").n, 1, "migration không nhân đôi");
+  invariants(db);
 });
 
 check("luật ngôn ngữ qua đường nạp", () => {
@@ -479,8 +493,8 @@ check("lọc địa điểm: không phân biệt hoa thường, nhiều thành p
     { title: "e", location: "Remote (USA)" },
   ];
   const { kept, dropped } = filterLocation(items, "Finland, helsinki, Remote");
-  eq(kept.map((x) => x.title), ["a", "b", "d", "e"], "giữ");
-  eq(dropped.map((x) => x.title), ["c"], "ngoài phạm vi");
+  eq(kept.map((x) => x.title), ["a", "b", "d"], "giữ");
+  eq(dropped.map((x) => x.title), ["c", "e"], "ngoài phạm vi: Berlin, và Remote (USA) vì có token nước ngoài");
   eq(filterLocation(items, "").kept.length, 5, "danh sách trống = không lọc");
   // Lớp mã nước: "fi" chỉ khớp khi đứng riêng làm token.
   const code = [
@@ -491,6 +505,17 @@ check("lọc địa điểm: không phân biệt hoa thường, nhiều thành p
   for (const [loc, want] of code) eq(filterLocation([{ title: "x", location: loc }], "fi").kept.length === 1, want, `mã nước fi: "${loc}"`);
   eq(filterLocation([{ title: "x", location: "Flexible within Subregion North (Finland, Sweden), se" }], "fi, Finland").kept.length, 1, "lớp thành phố/tên nước vẫn khớp chuỗi con");
   eq(filterLocation([{ title: "x", location: "Hyvinkää, fi" }], "Hyvinkää").kept.length, 1, "thành phố có dấu");
+  // Remote: chỉ giữ khi không có token nước ngoài Phần Lan. EU, Europe, Nordic không tính.
+  const remote = [
+    ["Remote", true], ["Remote, Finland", true], ["Remote (EU)", true],
+    ["Remote, US", false], ["Remote (Poland)", false], ["Remote, Germany", false],
+    ["Remote in Finland", true], ["Remote, Europe", true], ["Nordic remote", true], ["Garner, us, Remote", false],
+    ["United States, us, Remote", false], ["Remote-first, Estonia", false], ["Any KC site within EU, or, fi", false], // không có chữ remote; mục "fi" mới giữ nó
+  ];
+  for (const [loc, want] of remote) eq(filterLocation([{ title: "x", location: loc }], "Remote").kept.length === 1, want, `Remote: "${loc}"`);
+  ok(!hasForeignCountry("Remote in Finland") && hasForeignCountry("Remote, in") && !hasForeignCountry("Helsinki, fi"), "token nước theo đoạn, không theo từ");
+  // Remote ở nước ngoài vẫn có thể được giữ bởi mục khác (thành phố Phần Lan trong chuỗi) — đó là ý đồ.
+  eq(filterLocation([{ title: "x", location: "Helsinki or Remote, Sweden" }], "Helsinki, Remote").kept.length, 1, "Helsinki cứu chuỗi có Sweden");
 });
 
 check("đoán ngôn ngữ tin: dấu trong chức danh, hoặc JD nhiều từ Phần Lan", () => {

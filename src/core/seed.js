@@ -38,6 +38,15 @@ export const SEED_RULES = [
     note: "",
   },
   {
+    id: "r_abroad",
+    label: "Chỉ tuyển ở nước khác",
+    field: "location",
+    match: "us, gb, uk, pl, de, se, no, dk, in, ca",
+    action: "kill",
+    enabled: true,
+    note: "Mã nước trong chuỗi địa điểm của ATS (\"Garner, us, Remote\"). Khớp nguyên từ, nên \"in\" cũng bắt \"Remote in Finland\" — tắt luật thì cả lô quay về.",
+  },
+  {
     id: "r_custom",
     label: "Ngành ngoài phạm vi",
     field: "any",

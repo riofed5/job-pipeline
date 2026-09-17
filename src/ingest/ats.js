@@ -193,10 +193,34 @@ export const parseLocations = (s) => String(s ?? "").split(",").map((x) => x.tri
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const codeRe = (code) => new RegExp(`(?<![\\p{L}\\p{N}])${esc(code)}(?![\\p{L}\\p{N}])`, "iu");
 
+/* "Remote" chỉ giữ khi chuỗi KHÔNG có token nước ngoài Phần Lan. Token nước = một đoạn (tách bởi , ; ( ) / |)
+   đúng bằng mã ISO 2 chữ, hoặc tên nước xuất hiện nguyên từ. EU, Europe, Nordic, Scandinavia không tính.
+   Tách theo đoạn chứ không theo từ, để "Remote in Finland" không bị coi là Ấn Độ (in). */
+const ISO_CODES = new Set(("ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bl bm bn bo bq br bs bt bv bw by bz "
+  + "ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg eh er es et fj fk fm fo fr ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy "
+  + "hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mf mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz "
+  + "na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv sx sy sz "
+  + "tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug uk um us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw").split(" "));
+const FOREIGN_NAMES = ["united states", "usa", "u.s.", "united kingdom", "england", "scotland", "wales", "ireland", "germany", "deutschland", "poland", "polska",
+  "sweden", "sverige", "norway", "norge", "denmark", "danmark", "estonia", "eesti", "latvia", "lithuania", "netherlands", "belgium", "france", "spain", "portugal", "italy",
+  "switzerland", "austria", "czechia", "czech republic", "slovakia", "hungary", "romania", "bulgaria", "greece", "croatia", "serbia", "ukraine", "russia", "turkey",
+  "india", "china", "japan", "korea", "singapore", "australia", "new zealand", "canada", "mexico", "brazil", "argentina", "israel", "uae", "united arab emirates",
+  "south africa", "egypt", "nigeria", "kenya", "pakistan", "bangladesh", "vietnam", "thailand", "indonesia", "philippines", "malaysia", "iceland"];
+const NAME_RE = new RegExp(`(?<![\\p{L}])(?:${FOREIGN_NAMES.map(esc).join("|")})(?![\\p{L}])`, "iu");
+
+export function hasForeignCountry(location) {
+  const loc = str(location).toLowerCase();
+  if (loc.split(/[,;()/|]/).some((seg) => { const t = seg.trim(); return t.length === 2 && t !== "fi" && ISO_CODES.has(t); })) return true;
+  return NAME_RE.test(loc);
+}
+
 export function locationOk(location, locations) {
   const loc = str(location).toLowerCase();
   if (!loc || !locations.length) return true;
-  return locations.some((l) => (l.length === 2 ? codeRe(l).test(loc) : loc.includes(l)));
+  return locations.some((l) => {
+    if (l === "remote") return codeRe("remote").test(loc) && !hasForeignCountry(loc);
+    return l.length === 2 ? codeRe(l).test(loc) : loc.includes(l);
+  });
 }
 
 export function filterLocation(items, locationList) {
