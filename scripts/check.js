@@ -729,6 +729,7 @@ check("kênh từ người gửi; khớp dòng trong bảng sources", () => {
   eq(mailChannel({ from: "jobs-noreply@linkedin.com", fromName: "LinkedIn Job Alerts" }), "LinkedIn", "linkedin");
   eq(mailChannel({ from: "noreply@duunitori.fi", fromName: "Duunivahti" }), "Duunitori", "duunivahti → Duunitori");
   eq(mailChannel({ from: "alerts@thehub.io", fromName: "" }), "The Hub", "theo domain");
+  eq(mailChannel({ from: "noreply@engradar.com", fromName: "EngRadar Alerts" }), "EngRadar", "engradar");
   eq(mailChannel({ from: "x@unknown-board.com", fromName: "" }), "unknown-board.com", "không rõ thì domain");
   const db = openDb(":memory:");
   const sources = C.listSources(db);

@@ -13,6 +13,7 @@ const SRC_ALIAS = [
   [/wellfound|angellist/i, "Wellfound"],
   [/startup\.jobs/i, "startup.jobs"],
   [/jobly/i, "Jobly"],
+  [/engradar/i, "EngRadar"],
   [/talented|witted/i, "Talented"],
   [/toughbyte/i, "Toughbyte"],
   [/academic ?work/i, "Academic Work"],

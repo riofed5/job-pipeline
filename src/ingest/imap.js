@@ -20,7 +20,6 @@ import { htmlToText } from "./html.js";
 import { guessLanguage } from "./ats.js";
 
 const WINDOW_DAYS = 14;
-const MAX_NEW_MAILS = 200;      // mỗi lần; phần còn lại sang lần sau vì cửa sổ vẫn 14 ngày
 const MAX_CHARS = 60_000;       // một mail alert dài nhất cũng dưới mức này; quá thì ghi truncated
 const DEFAULT_MODEL = "claude-opus-5";
 
@@ -132,8 +131,7 @@ export async function fetchAlertMails({ host, user, password, label, skip = () =
       const env = m.envelope ?? {};
       const key = mailKey({ messageId: env.messageId, from: env.from?.[0]?.address, date: env.date, subject: env.subject });
       if (skip(key)) continue;
-      fresh.push({ uid: m.uid, key });
-      if (fresh.length >= MAX_NEW_MAILS) break;
+      fresh.push({ uid: m.uid, key }); // không có trần: mọi mail mới trong 14 ngày đều được xử lý lần này
     }
     for (const f of fresh) {
       const m = await client.fetchOne(f.uid, { source: true }, { uid: true });
