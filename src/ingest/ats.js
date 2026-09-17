@@ -7,6 +7,8 @@ import { htmlToText, decodeEntities } from "./html.js";
 
 export const USER_AGENT = "job-pipeline/0.1 (personal job-search tool; one user; contact via careers page)";
 const TIMEOUT_MS = 10_000;
+const MAX_PAGES = 20;        // 2000 tin một công ty là quá đủ
+const PAGE_GAP_MS = 1000;    // lịch sự: 1 req/giây, cả giữa các trang
 
 const str = (v) => (v == null ? "" : String(v)).trim();
 const iso = (v) => {
@@ -104,7 +106,10 @@ export const PLATFORMS = {
   },
   smartrecruiters: {
     label: "SmartRecruiters",
-    endpoint: (token) => `https://api.smartrecruiters.com/v1/companies/${token}/postings?limit=100`,
+    // Tối đa 100 tin một trang; fetchAts lặp theo offset tới totalFound.
+    endpoint: (token, offset = 0) => `https://api.smartrecruiters.com/v1/companies/${token}/postings?limit=100&offset=${offset}`,
+    pageSize: 100,
+    totalOf: (body) => JSON.parse(body).totalFound ?? 0,
     parse: (body, token) => {
       const data = JSON.parse(body);
       if (!Array.isArray(data.content)) throw new Error("không có mảng content");
@@ -158,7 +163,9 @@ export const PLATFORMS = {
       if (!/<rss|<channel/i.test(body)) throw new Error("không phải RSS");
       return xmlBlocks(body, "item").map((it) => ({
         title: xmlField(it, "title"),
-        location: xmlField(it, "location") || xmlField(it, "tt:location") || null,
+        // <tt:locations><tt:location><tt:name>Tallinn, Estonia</tt:name>… — có thể nhiều địa điểm.
+        location: xmlBlocks(it, "tt:location").map((l) => xmlField(l, "tt:name")).filter(Boolean).join("; ")
+          || xmlField(it, "location") || null,
         url: xmlField(it, "link") || null,
         postedAt: iso(xmlField(it, "pubDate")),
         description: text(xmlField(it, "description")) || null,
@@ -220,10 +227,24 @@ export async function httpGet(url, { etag = null, accept = "application/json, ap
 /* → { items, total, etag } hoặc { notModified: true, etag }. Ném lỗi khi HTTP lỗi hoặc body không parse được. */
 export async function fetchAts(platform, token, { etag = null, get = httpGet } = {}) {
   if (!isPlatform(platform)) throw new Error(`nền tảng không rõ: ${platform}`);
-  const url = PLATFORMS[platform].endpoint(token);
+  const P = PLATFORMS[platform];
+  const url = P.endpoint(token);
   const res = await get(url, { etag });
   if (res.status === 304) return { notModified: true, etag };
   if (res.status !== 200) throw new Error(`HTTP ${res.status} từ ${url}`);
-  const items = parseFeed(platform, res.body, token).map((it) => ({ ...it, adLanguage: guessLanguage(it.title, it.description) }));
+  let items = parseFeed(platform, res.body, token);
+  // Nền tảng phân trang: đi tiếp theo offset tới khi đủ totalFound. ETag chỉ theo trang đầu.
+  if (P.pageSize) {
+    const total = P.totalOf(res.body);
+    for (let offset = P.pageSize; offset < total && offset < P.pageSize * MAX_PAGES; offset += P.pageSize) {
+      await new Promise((r) => setTimeout(r, PAGE_GAP_MS));
+      const next = await get(P.endpoint(token, offset));
+      if (next.status !== 200) throw new Error(`HTTP ${next.status} từ trang offset=${offset}`);
+      const page = parseFeed(platform, next.body, token);
+      if (!page.length) break;
+      items = items.concat(page);
+    }
+  }
+  items = items.map((it) => ({ ...it, adLanguage: guessLanguage(it.title, it.description) }));
   return { items, total: items.length, etag: res.etag ?? null };
 }

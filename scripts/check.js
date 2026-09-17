@@ -427,7 +427,7 @@ check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", ()
     smartrecruiters: [JSON.stringify({ content: [{ id: "99", name: "QA Engineer", location: { city: "Tampere", country: "fi" }, releasedDate: "2026-09-01T00:00:00Z" }] }), "x"],
     workable: [JSON.stringify({ jobs: [{ title: "Frontend", shortcode: "AB", url: "https://apply.workable.com/x/j/AB", city: "Oulu", country: "Finland", published_on: "2026-09-01", description: "<p>JD</p>" }] }), "x"],
     personio: ["<workzag-jobs><position><id>7</id><office>Helsinki</office><name>Ohjelmistokehittäjä</name><jobDescriptions><jobDescription><name>Tehtävä</name><value><![CDATA[<p>Meillä ja sinulla</p>]]></value></jobDescription></jobDescriptions></position></workzag-jobs>", "acme"],
-    teamtailor: ["<rss><channel><item><title>Platform Engineer</title><link>https://career.acme.fi/jobs/1</link><location>Helsinki</location><pubDate>Mon, 01 Sep 2026 00:00:00 GMT</pubDate><description><![CDATA[<p>JD</p>]]></description></item></channel></rss>", "https://career.acme.fi"],
+    teamtailor: ['<rss xmlns:tt="https://teamtailor.com/locations"><channel><item><title>Platform Engineer</title><link>https://career.acme.fi/jobs/1</link><tt:locations><tt:location><tt:name>Tallinn, Estonia</tt:name><tt:city>Tallinn</tt:city></tt:location><tt:location><tt:name>Helsinki, Finland</tt:name></tt:location></tt:locations><pubDate>Mon, 01 Sep 2026 00:00:00 GMT</pubDate><description><![CDATA[<p>JD</p>]]></description></item></channel></rss>', "https://career.acme.fi"],
   };
   for (const [platform, [body, token]] of Object.entries(cases)) {
     const items = parseFeed(platform, body, token);
@@ -439,6 +439,7 @@ check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", ()
   }
   eq(parseFeed("greenhouse", cases.greenhouse[0], "wolt")[0].description, "Hello & hi", "greenhouse content giải mã hai lớp");
   eq(parseFeed("ashby", cases.ashby[0], "x")[0].location, "Helsinki, Remote", "ashby: gộp remote vào location");
+  eq(parseFeed("teamtailor", cases.teamtailor[0], "x")[0].location, "Tallinn, Estonia; Helsinki, Finland", "teamtailor: tt:location/tt:name, nhiều địa điểm");
   ok(parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2025-09-01") || parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2026-09-01"), "lever: ms epoch");
   let threw = false;
   try { parseFeed("greenhouse", "{}", "x"); } catch { threw = true; }
@@ -557,6 +558,23 @@ await checkAsync("fetchAts: 304 → notModified; ETag trả về; HTTP lỗi né
   let threw = "";
   try { await fetchAts("lever", "x", { get: async (url) => ({ status: 500, body: "", etag: null, url }) }); } catch (e) { threw = e.message; }
   ok(threw.startsWith("HTTP 500"), `lỗi HTTP: ${threw}`);
+});
+
+await checkAsync("SmartRecruiters phân trang theo offset tới totalFound; trang rỗng thì dừng", async () => {
+  const calls = [];
+  const page = (offset, n, totalFound = 250) => JSON.stringify({ offset, limit: 100, totalFound,
+    content: Array.from({ length: n }, (_, i) => ({ id: String(offset + i), name: `Job ${offset + i}`, location: { city: "Hyvinkää", country: "fi" } })) });
+  const get = async (url) => {
+    calls.push(url);
+    const offset = Number(new URL(url).searchParams.get("offset"));
+    return { status: 200, url, etag: offset ? null : "e1", body: page(offset, offset === 200 ? 50 : 100) };
+  };
+  const r = await fetchAts("smartrecruiters", "konecranes", { get });
+  eq([r.total, r.etag], [250, "e1"], "gộp 3 trang, etag trang đầu");
+  eq(calls.map((u) => new URL(u).searchParams.get("offset")), ["0", "100", "200"], "offset từng trang");
+  eq(new Set(r.items.map((i) => i.externalId)).size, 250, "không trùng");
+  const one = await fetchAts("smartrecruiters", "x", { get: async (url) => ({ status: 200, url, etag: null, body: page(0, 7, 7) }) });
+  eq(one.total, 7, "dưới một trang thì không gọi thêm");
 });
 
 check("ghi kết quả kéo: last_new_at chỉ đổi khi có tin mới; setCompanyAts xóa ETag cũ", () => {

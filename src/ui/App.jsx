@@ -571,7 +571,7 @@ function Find({ ingest, pull, startPull, conf }) {
               {results.map((r, i) => {
                 const blind = r.kind === "ats" && !r.error && r.total > 0 && r.kept === 0;
                 return (
-                  <tr key={i} className={r.error ? "bad" : blind ? "thin" : ""}>
+                  <tr key={i} className={r.error ? "bad" : blind ? "blind" : ""}>
                     <td>{r.name}{r.platform ? <span className="dim"> · {r.platform}</span> : ""}
                       {r.error && <div className="errSm">{r.error}</div>}
                       {blind && <div className="errSm">0 giữ trên {r.total} tin: định dạng địa điểm của họ không khớp danh sách lọc, không phải họ không tuyển ở Phần Lan.</div>}
@@ -1023,6 +1023,7 @@ padding:6px 10px;background:#FBF3E4;border-radius:5px;border-left:2px solid var(
 .candidate button.off{color:var(--muted)}
 .small{font-size:12.5px;margin:0}
 .yield tr.bad td{color:#9A2C1E}
+.yield tr.blind td{color:var(--amber)}
 .srcLine{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}
 .srcLbl{font-size:13px;color:var(--muted)}
 .filterRow{display:flex;gap:6px;flex-wrap:wrap}
