@@ -155,6 +155,11 @@ const MIGRATIONS = [
     db.exec(SCHEMA_V5);
   },
   migrateV6,
+  /* v7 — r_abroad bỏ "in" và "no" (trùng từ tiếng Anh), thay bằng india, norway. Chỉ sửa nếu người chưa đổi tay. */
+  (db) => {
+    db.prepare("UPDATE rules SET match = ?, needs_rerun = 1 WHERE id = 'r_abroad' AND match = ?")
+      .run("us, gb, uk, pl, de, se, dk, ca, india, norway", "us, gb, uk, pl, de, se, no, dk, in, ca");
+  },
 ];
 
 export function openDb(file) {

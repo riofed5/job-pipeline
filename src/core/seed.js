@@ -41,10 +41,10 @@ export const SEED_RULES = [
     id: "r_abroad",
     label: "Chỉ tuyển ở nước khác",
     field: "location",
-    match: "us, gb, uk, pl, de, se, no, dk, in, ca",
+    match: "us, gb, uk, pl, de, se, dk, ca, india, norway",
     action: "kill",
     enabled: true,
-    note: "Mã nước trong chuỗi địa điểm của ATS (\"Garner, us, Remote\"). Khớp nguyên từ, nên \"in\" cũng bắt \"Remote in Finland\" — tắt luật thì cả lô quay về.",
+    note: "Mã nước trong chuỗi địa điểm của ATS (\"Garner, us, Remote\"). Không dùng \"in\" và \"no\" vì trùng từ tiếng Anh (\"Remote in Finland\", \"no relocation\"); thay bằng india, norway.",
   },
   {
     id: "r_custom",

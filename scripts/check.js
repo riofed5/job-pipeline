@@ -164,7 +164,10 @@ check("luật mẫu r_abroad: bật sẵn, có ở DB mới lẫn DB cũ qua mig
   const b = add(db, "Data Engineer", "Konecranes", { location: "Hyvinkää, fi" });
   eq(state(db, b.id), ["new", null, null], "fi → giữ");
   const c = add(db, "SRE", "Konecranes", { location: "Remote in Finland" });
-  eq(state(db, c.id), ["killed", "rule", "r_abroad"], "'in' khớp nguyên từ — biết trước, tắt luật thì hồi sinh");
+  eq(state(db, c.id), ["new", null, null], "'in' không còn trong luật → Remote in Finland giữ");
+  eq(state(db, add(db, "QA", "Konecranes", { location: "Helsinki, no relocation" }).id), ["new", null, null], "'no' không còn trong luật");
+  eq(state(db, add(db, "Dev", "Konecranes", { location: "Oslo, Norway" }).id), ["killed", "rule", "r_abroad"], "norway theo tên");
+  eq(state(db, add(db, "Dev2", "Konecranes", { location: "Bengaluru, India" }).id), ["killed", "rule", "r_abroad"], "india theo tên");
   eq(one(db, "SELECT COUNT(*) n FROM rules WHERE id = 'r_abroad'").n, 1, "migration không nhân đôi");
   invariants(db);
 });
