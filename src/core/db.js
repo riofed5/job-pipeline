@@ -171,6 +171,8 @@ const MIGRATIONS = [
     upd.run(SEED_RULES.find((r) => r.id === "r_senior_hard").match, "r_senior_hard",
       "lead, principal, head of, director, staff engineer, architect, vp of, chief, manager");
   },
+  /* v10 — luật mẫu r_otherlang: tiêu đề bằng/đòi ngôn ngữ khác → Ngờ vực. */
+  (db) => insertSeedRule(db, "r_otherlang"),
 ];
 
 export function openDb(file) {

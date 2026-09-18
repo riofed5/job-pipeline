@@ -56,6 +56,15 @@ export const SEED_RULES = [
     note: "Không có JD để đọc, không có deadline. Ngờ vực để rà soát tuần quyết, không làm ngập Hộp đến.",
   },
   {
+    id: "r_otherlang",
+    label: "Ngôn ngữ làm việc khác",
+    field: "title",
+    match: "german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare",
+    action: "doubt",
+    enabled: true,
+    note: "Tiêu đề bằng hoặc đòi tiếng Đức, Thụy Điển, Tây Ban Nha, Serbia. *entwickler vì tiếng Đức ghép từ (Softwareentwickler). Ngờ vực vì có công ty đăng song ngữ.",
+  },
+  {
     id: "r_custom",
     label: "Ngành ngoài phạm vi",
     field: "any",

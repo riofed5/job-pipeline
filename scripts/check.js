@@ -210,6 +210,20 @@ check("từ khóa mới 2026-09-18: legal/electrical/investment/vp bị bắt; m
   } finally { fs.rmSync(tmp, { force: true }); fs.rmSync(tmp + "-wal", { force: true }); fs.rmSync(tmp + "-shm", { force: true }); }
 });
 
+check("luật mẫu r_otherlang: german-speaking, ingeniero, entwickler, utvecklare → Ngờ vực", () => {
+  const db = openDb(":memory:");
+  const r = C.getRule(db, "r_otherlang");
+  ok(r && r.enabled && r.field === "title" && r.action === "doubt", "luật mẫu có và bật");
+  for (const t of ["DACH German-speaking Account Manager", "Ingeniero de Seguridad", "Softwareentwickler (m/w/d)", "Systemutvecklare", "Spanish Customer Support", "Serbian Speaking Developer", "Swedish-speaking Developer"]) {
+    const s = state(db, add(db, t, "Acme").id);
+    ok(s[0] !== "new", `${t}: ${JSON.stringify(s)}`);
+  }
+  eq(state(db, add(db, "Entwicklerin Backend", "Acme").id), ["new", null, null], "*entwickler không dính Entwicklerin (đuôi khác) — chấp nhận");
+  eq(state(db, add(db, "Backend Engineer", "Acme").id), ["new", null, null], "tin thường vào");
+  eq(one(db, "SELECT COUNT(*) n FROM rules WHERE id = 'r_otherlang'").n, 1, "không nhân đôi");
+  invariants(db);
+});
+
 check("luật ngôn ngữ qua đường nạp", () => {
   const db = openDb(":memory:");
   const a = add(db, "Ohjelmistokehittäjä", "Solita", { adLanguage: "fi" });
