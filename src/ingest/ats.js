@@ -178,6 +178,21 @@ export const PLATFORMS = {
 
 export const isPlatform = (p) => Object.prototype.hasOwnProperty.call(PLATFORMS, p);
 
+/* Slug kiểu trang công ty (đo trên supercell.com, 41/41 khớp): bỏ dấu, bỏ hẳn ký tự không phải chữ/số
+   (R.I.S.E → rise, "Ops & Monetization" → ops-monetization), khoảng trắng thành gạch nối. */
+export function slugify(title) {
+  return String(title ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "").trim().replace(/[\s-]+/g, "-");
+}
+
+/* Dựng link tin từ mẫu của công ty: {id}, {slug}, {title}. Mẫu trống → giữ url của feed. */
+export function applyUrlTemplate(template, item) {
+  const t = String(template ?? "").trim();
+  if (!t || !item.externalId) return item.url;
+  return t.replace(/\{id\}/g, encodeURIComponent(item.externalId)).replace(/\{slug\}/g, slugify(item.title))
+    .replace(/\{title\}/g, encodeURIComponent(item.title));
+}
+
 export function parseFeed(platform, body, token) {
   if (!isPlatform(platform)) throw new Error(`nền tảng không rõ: ${platform}`);
   return PLATFORMS[platform].parse(body, token).filter((j) => j.title);

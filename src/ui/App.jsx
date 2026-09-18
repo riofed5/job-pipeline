@@ -693,6 +693,11 @@ function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) 
               {c.pullTotal != null && <span>{c.pullTotal} tin · {c.pullCount} giữ</span>}
               {c.lastNewAt && <span>tin mới gần nhất {ymd(c.lastNewAt)}</span>}
               {c.lastError && <span className="errSm">lỗi: {c.lastError}</span>}
+              {c.ats && c.ats !== "manual" && (
+                <input className="inline" placeholder="mẫu link tin nếu trang ATS chết: https://…/{slug}/{id}/" value={c.jobUrlTemplate || ""}
+                  title="Trang hosted của ATS trả 'Page not found' (Supercell) thì đặt mẫu link của trang công ty. {id} = id tin trong ATS, {slug} = tiêu đề dạng slug."
+                  onChange={(e) => patch(c.id, { jobUrlTemplate: e.target.value })} />
+              )}
               {c.ats && c.ats !== "manual" && deadFor(c) && (
                 <span className="warnLine">{deadFor(c)} ngày không có tin mới từ feed. Bấm “Dò lại ATS” để chắc token còn đúng.</span>
               )}

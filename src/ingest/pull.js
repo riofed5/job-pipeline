@@ -10,7 +10,7 @@ import { now } from "../core/db.js";
 import * as jobs from "../core/jobs.js";
 import * as config from "../core/config.js";
 import { fingerprint } from "../core/dedupe.js";
-import { fetchAts as realFetchAts, filterLocation } from "./ats.js";
+import { fetchAts as realFetchAts, filterLocation, applyUrlTemplate } from "./ats.js";
 import { imapConfigured, createImapStep } from "./imap.js";
 import { summarize } from "./summary.js";
 
@@ -48,12 +48,15 @@ export function createPuller(db, { fetchAts = realFetchAts, extra = defaultExtra
         config.markCompanyPull(db, c.id, { added: 0, count: c.pullCount, total: c.pullTotal });
         return r;
       }
-      const { kept, dropped } = filterLocation(feed.items, locations);
-      r.total = feed.items.length;
+      const items = feed.items.map((it) => ({ ...it, url: applyUrlTemplate(c.jobUrlTemplate, it) }));
+      const { kept, dropped } = filterLocation(items, locations);
+      r.total = items.length;
       r.kept = kept.length;
       r.dropped = dropped.length;
       const counts = jobs.ingest(db, kept.map((it) => ({ ...it, company: c.name })), atsSource(c));
       Object.assign(r, { added: counts.added, auto: counts.auto, dup: counts.dup });
+      // Mẫu link đổi (hoặc mới đặt) thì tin cũ cũng phải trỏ đúng chỗ.
+      if (c.jobUrlTemplate) r.relinked = jobs.relinkSource(db, atsSource(c).source, kept.map((it) => ({ fingerprint: fingerprint(c.name, it.title), url: it.url }))).changed;
       // Feed 200 thật (không phải 304): tin ats:* từng có mà không còn trong feed → đã đóng.
       const live = feed.items.map((it) => fingerprint(c.name, it.title));
       r.closed = jobs.markClosed(db, atsSource(c).source, live).closed;

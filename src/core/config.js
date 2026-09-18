@@ -106,6 +106,7 @@ const toCompany = (c) => ({
   ats: c.ats,
   atsToken: c.ats_token,
   atsEtag: c.ats_etag,
+  jobUrlTemplate: c.job_url_template ?? "",
   lastPull: c.last_pull,
   firstPull: c.first_pull,
   lastNewAt: c.last_new_at,
@@ -130,13 +131,16 @@ export function addCompany(db, { name, tier = "" } = {}) {
 }
 
 export function patchCompany(db, id, patch = {}) {
-  const cols = { tier: "tier", url: "careers_url", note: "note" };
+  const cols = { tier: "tier", url: "careers_url", note: "note", jobUrlTemplate: "job_url_template" };
   const bad = Object.keys(patch).filter((k) => !(k in cols));
   if (bad.length) throw httpError(400, `không sửa được: ${bad.join(", ")}`);
   if ("tier" in patch && !TIERS.includes(patch.tier)) throw httpError(400, "hạng không hợp lệ");
   if (!db.prepare("SELECT 1 FROM companies WHERE id = ?").get(id)) throw httpError(404, "không có công ty này");
+  if ("jobUrlTemplate" in patch && String(patch.jobUrlTemplate).trim() && !/\{id\}/.test(patch.jobUrlTemplate)) {
+    throw httpError(400, "mẫu link tin phải có {id}");
+  }
   db.transaction(() => {
-    for (const [k, v] of Object.entries(patch)) db.prepare(`UPDATE companies SET ${cols[k]} = ? WHERE id = ?`).run(String(v), id);
+    for (const [k, v] of Object.entries(patch)) db.prepare(`UPDATE companies SET ${cols[k]} = ? WHERE id = ?`).run(String(v).trim() || (k === "jobUrlTemplate" ? null : ""), id);
   })();
   return toCompany(db.prepare("SELECT * FROM companies WHERE id = ?").get(id));
 }

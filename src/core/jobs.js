@@ -240,6 +240,23 @@ export function killBySource(db, source, note) {
   })();
 }
 
+/* Link tin đổi (công ty đặt mẫu link vì trang hosted của ATS chết): cập nhật jobs.url và sightings.url của nguồn đó.
+   Không đụng status, không ghi event. */
+export function relinkSource(db, source, links) {
+  return db.transaction(() => {
+    let changed = 0;
+    for (const { fingerprint: fp, url } of links) {
+      if (!url) continue;
+      const j = stmt(db, "SELECT id, url FROM jobs WHERE fingerprint = ?").get(fp);
+      if (!j) continue;
+      const s = stmt(db, "SELECT url FROM sightings WHERE job_id = ? AND source = ?").get(j.id, source);
+      if (s && s.url !== url) stmt(db, "UPDATE sightings SET url = ? WHERE job_id = ? AND source = ?").run(url, j.id, source);
+      if (j.url !== url && (j.url === (s?.url ?? null) || !j.url || s)) { stmt(db, "UPDATE jobs SET url = ? WHERE id = ?").run(url, j.id); changed++; }
+    }
+    return { changed };
+  })();
+}
+
 /* Tín hiệu tin còn sống, chỉ ATS cho được: feed 200 thật mà tin từng thấy ở nguồn này không còn → closed_at.
    Xuất hiện lại → bỏ closed_at. KHÔNG đổi status, không ghi event — chỉ là nhãn để khỏi mở tin chết. */
 export function markClosed(db, source, liveFingerprints) {

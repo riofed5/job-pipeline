@@ -173,6 +173,13 @@ const MIGRATIONS = [
   },
   /* v10 — luật mẫu r_otherlang: tiêu đề bằng/đòi ngôn ngữ khác → Ngờ vực. */
   (db) => insertSeedRule(db, "r_otherlang"),
+  /* v11 — companies.job_url_template: công ty tắt trang hosted của ATS (Supercell) thì dựng link tin từ mẫu
+     của trang công ty, {id} và {slug} thay bằng id và slug của tin. */
+  (db) => {
+    if (!db.pragma("table_info(companies)").some((c) => c.name === "job_url_template")) {
+      db.exec("ALTER TABLE companies ADD COLUMN job_url_template TEXT");
+    }
+  },
 ];
 
 export function openDb(file) {

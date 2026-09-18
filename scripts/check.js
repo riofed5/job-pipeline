@@ -14,7 +14,7 @@ import { compileRules, compileTerm, evaluate } from "../src/core/rules.js";
 import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
 import { sortJobs } from "../src/ui/sort.js";
-import { parseFeed, filterLocation, guessLanguage, fetchAts, hasForeignCountry } from "../src/ingest/ats.js";
+import { parseFeed, filterLocation, guessLanguage, fetchAts, hasForeignCountry, slugify, applyUrlTemplate } from "../src/ingest/ats.js";
 import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats.js";
 import { createPuller, atsSource } from "../src/ingest/pull.js";
 import { summarize } from "../src/ingest/summary.js";
@@ -760,6 +760,42 @@ await checkAsync("kéo: mọi tin qua ingest + luật; số feed/giữ/ngoài ph
   eq(s.results, settings.lastPullResult.results, "status sau khi xong đọc từ settings");
   ok(summarize(s.results).includes("3 tin mới") && summarize(s.results).includes("1 nguồn lỗi") && summarize(s.results).includes("2 ngoài phạm vi"), summarize(s.results));
   eq(C.getCompany(db, acme.id).ats, "ashby", "không đụng cấu hình");
+  invariants(db);
+});
+
+check("slug kiểu trang công ty + mẫu link tin", () => {
+  eq(slugify("MarTech Engineer"), "martech-engineer", "đơn giản");
+  eq(slugify("Senior Client Programmer, Project R.I.S.E"), "senior-client-programmer-project-rise", "dấu chấm bỏ hẳn");
+  eq(slugify("Senior Product Manager, Live Ops & Monetization, Hay Day"), "senior-product-manager-live-ops-monetization-hay-day", "& bỏ hẳn");
+  eq(slugify("Art Director, Clash of Clans"), "art-director-clash-of-clans", "dấu phẩy");
+  eq(slugify("Ohjelmistokehittäjä (Senior)"), "ohjelmistokehittaja-senior", "bỏ dấu, ngoặc");
+  const it = { title: "MarTech Engineer", externalId: "32c5", url: "https://jobs.ashbyhq.com/supercell/32c5" };
+  eq(applyUrlTemplate("https://supercell.com/en/careers/{slug}/{id}/", it), "https://supercell.com/en/careers/martech-engineer/32c5/", "mẫu");
+  eq(applyUrlTemplate("", it), it.url, "không mẫu → url feed");
+  eq(applyUrlTemplate("https://x/{id}", { ...it, externalId: "" }), it.url, "không id → url feed");
+});
+
+await checkAsync("mẫu link tin: tin mới dùng mẫu, tin cũ được nối lại, patchCompany đòi {id}", async () => {
+  const db = openDb(":memory:");
+  const sc = atsCompany(db, "Supercell", "ashby", "supercell");
+  const feed = () => feedOf([{ title: "MarTech Engineer", location: "Helsinki", url: "https://jobs.ashbyhq.com/supercell/32c5", externalId: "32c5" }]);
+  const p = createPuller(db, { fetchAts: async () => feed(), extra: [], gapMs: 0 });
+  p.start(); await p.wait();
+  const id = one(db, "SELECT id FROM jobs WHERE title = 'MarTech Engineer'").id;
+  eq(job(db, id).url, "https://jobs.ashbyhq.com/supercell/32c5", "chưa có mẫu → url feed");
+  let threw = false;
+  try { C.patchCompany(db, sc.id, { jobUrlTemplate: "https://supercell.com/en/careers/" }); } catch (e) { threw = e.status === 400; }
+  ok(threw, "mẫu không có {id} bị từ chối");
+  C.patchCompany(db, sc.id, { jobUrlTemplate: "https://supercell.com/en/careers/{slug}/{id}/" });
+  eq(C.getCompany(db, sc.id).jobUrlTemplate, "https://supercell.com/en/careers/{slug}/{id}/", "lưu mẫu");
+  const p2 = createPuller(db, { fetchAts: async () => feed(), extra: [], gapMs: 0 });
+  p2.start(); const s = await p2.wait();
+  eq(s.results[0].relinked, 1, "một tin nối lại");
+  eq(job(db, id).url, "https://supercell.com/en/careers/martech-engineer/32c5/", "tin cũ trỏ sang trang công ty");
+  eq(one(db, "SELECT url FROM sightings WHERE job_id = ?", id).url, "https://supercell.com/en/careers/martech-engineer/32c5/", "sighting cũng đổi");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n, 1, "nối lại không ghi event");
+  C.patchCompany(db, sc.id, { jobUrlTemplate: "" });
+  eq(C.getCompany(db, sc.id).jobUrlTemplate, "", "xóa mẫu");
   invariants(db);
 });
 
