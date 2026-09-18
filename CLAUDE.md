@@ -43,8 +43,8 @@ Con số ở dòng tiêu đề trên là cổng chặn duy nhất. Nó chỉ đ�
 
 - **Lập kế hoạch trước, chờ tao duyệt, rồi mới viết code.** Với mọi việc lớn hơn một file.
 - **Một bước một phiên.** Xong bước thì dừng, đừng chạy tiếp sang bước sau.
-- Xong mỗi phần chạy được thì **commit** kèm mô tả ngắn.
-- **STATUS.md cập nhật trong CÙNG commit với thay đổi**, không để sau. Mô tả bằng tiếng Anh (bắt buộc)
+- Xong mỗi phần chạy được thì **commit** kèm mô tả ngắn. Mô tả bằng tiếng Anh (bắt buộc).
+- **STATUS.md cập nhật trong CÙNG commit với thay đổi**, không để sau.
 - Không thêm dependency nếu chưa hỏi.
 - Không refactor phần đang chạy tốt trừ khi tao yêu cầu.
 - Khi tao chỉ ra lỗi, sửa đúng chỗ đó. Đừng nhân tiện dọn dẹp chỗ khác.
