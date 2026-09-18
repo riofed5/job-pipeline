@@ -78,7 +78,8 @@ export const PLATFORMS = {
     parse: (body) => {
       const data = JSON.parse(body);
       if (!Array.isArray(data.jobs)) throw new Error("không có mảng jobs");
-      return data.jobs.map((j) => ({
+      // Feed trả cả tin đã gỡ khỏi trang (isListed: false, kể cả "Unlisted TEST job"). Bỏ để closed_at bắt được.
+      return data.jobs.filter((j) => j.isListed !== false).map((j) => ({
         title: str(j.title),
         location: joinLoc(j.location, ...(j.secondaryLocations ?? []).map((l) => l?.location), j.isRemote ? "Remote" : ""),
         url: str(j.jobUrl) || null,

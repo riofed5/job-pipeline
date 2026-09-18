@@ -163,6 +163,14 @@ const MIGRATIONS = [
   },
   /* v8 — luật mẫu r_openapp: đơn mở → Ngờ vực. */
   (db) => insertSeedRule(db, "r_openapp"),
+  /* v9 — từ khóa mới cho r_notrole và r_senior_hard (NOTES 2026-09-18). Chỉ sửa nếu người chưa đổi tay. */
+  (db) => {
+    const upd = db.prepare("UPDATE rules SET match = ?, needs_rerun = 1 WHERE id = ? AND match = ?");
+    upd.run(SEED_RULES.find((r) => r.id === "r_notrole").match, "r_notrole",
+      "sales, marketing, recruiter, talent acquisition, hr, account manager, designer, ux, customer success, support specialist, controller, accountant");
+    upd.run(SEED_RULES.find((r) => r.id === "r_senior_hard").match, "r_senior_hard",
+      "lead, principal, head of, director, staff engineer, architect, vp of, chief, manager");
+  },
 ];
 
 export function openDb(file) {

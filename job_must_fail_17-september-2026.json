@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "jobs": [
+    {
+      "company": "Wolt",
+      "job_title": "Commerce Platform Account Specialist - Thessaloniki",
+      "status": "REJECT",
+      "rejection_category": "IRRELEVANT_ROLE",
+      "reason": "Job description không liên quan đến loại job đang tìm."
+    },
+    {
+      "company": "Konecranes",
+      "job_title": "Business Analyst",
+      "status": "REJECT",
+      "rejection_category": "IRRELEVANT_ROLE",
+      "reason": "Job description không liên quan đến loại job đang tìm."
+    },
+    {
+      "company": "Konecranes",
+      "job_title": "Engineer, Energy and Drives",
+      "status": "REJECT",
+      "rejection_category": "WRONG_ENGINEERING_FIELD",
+      "reason": "Hardware engineering role, không liên quan software."
+    },
+    {
+      "company": "Konecranes",
+      "job_title": "Electrical Engineer",
+      "status": "REJECT",
+      "rejection_category": "SKILLS_MISMATCH",
+      "reason": "Skills trong job description không phù hợp."
+    },
+    {
+      "company": "Konecranes",
+      "job_title": "Ingeniero de Seguridad",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_OR_LOCATION_MISMATCH",
+      "reason": "Job description bằng Spanish và không phải remote job."
+    },
+    {
+      "company": "Bravida Finland Oy",
+      "job_title": "Harjoitteluun Bravida Finlandille",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Job description bằng Finnish."
+    },
+    {
+      "company": "Kalmar",
+      "job_title": "Trainee, Service Operations Development",
+      "status": "REJECT",
+      "rejection_category": "APPLICATION_EXPIRED",
+      "reason": "Đã quá hạn nộp application."
+    },
+    {
+      "company": "Lujatalo Oy",
+      "job_title": "Trainee",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Job description bằng Finnish."
+    },
+    {
+      "company": "NoA Connect",
+      "job_title": "SEM Trainee",
+      "status": "REJECT",
+      "rejection_category": "APPLICATION_EXPIRED",
+      "reason": "Application đã hết hạn."
+    },
+    {
+      "company": "DNA Oyj",
+      "job_title": "Korkeakouluharjoittelu DNA:lla",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Job description bằng Finnish."
+    },
+    {
+      "company": "Nets",
+      "job_title": "Graduate Program IT & Technology - Finland",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Yêu cầu tiếng Finnish."
+    },
+    {
+      "company": "LähiTapiola Varainhoito",
+      "job_title": "Trainee-analyytikko, liiketoiminta-analytiikka ja raportointi",
+      "status": "REJECT",
+      "rejection_category": "APPLICATION_EXPIRED",
+      "reason": "Application đã hết hạn."
+    },
+    {
+      "company": "SGS",
+      "job_title": "Junior Testing Engineer",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Job description bằng Finnish."
+    },
+    {
+      "company": "BCG X",
+      "job_title": "Forward Deployed AI Scientist, Internship, Finland - BCG X",
+      "status": "REJECT",
+      "rejection_category": "ROLE_MISMATCH",
+      "reason": "Job description thiên về business."
+    },
+    {
+      "company": "Wolt",
+      "job_title": "Ads & Promotions Specialist",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Job description yêu cầu Finnish."
+    },
+    {
+      "company": "Wolt",
+      "job_title": "English-Speaking Support Associate (Full-time - Remote)",
+      "status": "REJECT",
+      "rejection_category": "ROLE_OR_LANGUAGE_MISMATCH",
+      "reason": "Title không phù hợp; job description yêu cầu Serbian."
+    },
+    {
+      "company": "Supercell",
+      "job_title": "Unlisted TEST job - do not delete",
+      "status": "REJECT",
+      "rejection_category": "JOB_UNAVAILABLE",
+      "reason": "Job đã bị xóa hoặc page not found."
+    },
+    {
+      "company": "Supercell",
+      "job_title": "Total Rewards Partner, Equity Compensation",
+      "status": "REJECT",
+      "rejection_category": "JOB_UNAVAILABLE",
+      "reason": "Job đã bị xóa hoặc page not found."
+    },
+    {
+      "company": "Supercell",
+      "job_title": "Investment Intern",
+      "status": "REJECT",
+      "rejection_category": "JOB_UNAVAILABLE",
+      "reason": "Job đã bị xóa hoặc page not found."
+    },
+    {
+      "company": "Supercell",
+      "job_title": "Gameplay Capture & Video Artist, Creative Studio",
+      "status": "REJECT",
+      "rejection_category": "JOB_UNAVAILABLE",
+      "reason": "Job đã bị xóa hoặc page not found."
+    },
+    {
+      "company": "Supercell",
+      "job_title": "MarTech Engineer",
+      "status": "REJECT",
+      "rejection_category": "JOB_UNAVAILABLE",
+      "reason": "Job đã bị xóa hoặc page not found."
+    },
+    {
+      "company": "Smartly.io",
+      "job_title": "Smartly Launchpad 2027 (Software Engineer)",
+      "status": "ALREADY_ADDED",
+      "rejection_category": "DUPLICATE_EXISTING",
+      "reason": "Đã có trên job board."
+    },
+    {
+      "company": "Oura",
+      "job_title": "Paid Search Specialist (US)",
+      "status": "REJECT",
+      "rejection_category": "RESEARCH_FOCUSED",
+      "reason": "Pure research job."
+    },
+    {
+      "company": "Oura",
+      "job_title": "Research Coordinator, Science",
+      "status": "REJECT",
+      "rejection_category": "RESEARCH_FOCUSED",
+      "reason": "Pure research job."
+    },
+    {
+      "company": "Konecranes",
+      "job_title": "Corporate Communications Specialist",
+      "status": "REJECT",
+      "rejection_category": "IRRELEVANT_ROLE",
+      "reason": "Không liên quan IT."
+    },
+    {
+      "company": "IQM Quantum Computers",
+      "job_title": "Legal Counsel, Finland",
+      "status": "REJECT",
+      "rejection_category": "IRRELEVANT_ROLE",
+      "reason": "Legal-related job."
+    },
+    {
+      "company": "IQM Quantum Computers",
+      "job_title": "Mechanical Engineer",
+      "status": "REJECT",
+      "rejection_category": "WRONG_ENGINEERING_FIELD",
+      "reason": "Mechanical engineering job."
+    },
+    {
+      "company": "IQM Quantum Computers",
+      "job_title": "Quantum Engineer, Gates",
+      "status": "REJECT",
+      "rejection_category": "WRONG_SPECIALIZATION",
+      "reason": "Quantum engineering role."
+    },
+    {
+      "company": "Hoxhunt",
+      "job_title": "Account Executive, DACH (German-speaking)",
+      "status": "REJECT",
+      "rejection_category": "LANGUAGE_REQUIREMENT",
+      "reason": "Title yêu cầu German language skill."
+    },
+    {
+      "company": "Futurice",
+      "job_title": "VP, Consumer & Commercial",
+      "status": "UNKNOWN",
+      "rejection_category": "MISSING_REASON",
+      "reason": "Chưa có reason trong dữ liệu gốc."
+    }
+  ]
+}

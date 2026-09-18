@@ -185,6 +185,31 @@ check("luật mẫu r_openapp: đơn mở → Ngờ vực; luật loại vẫn t
   invariants(db);
 });
 
+check("từ khóa mới 2026-09-18: legal/electrical/investment/vp bị bắt; migration v9 không đè luật đã sửa tay", () => {
+  const db = openDb(":memory:");
+  eq(state(db, add(db, "Legal Counsel").id), ["killed", "rule", "r_notrole"], "legal");
+  eq(state(db, add(db, "Electrical Engineer").id), ["killed", "rule", "r_notrole"], "electrical");
+  eq(state(db, add(db, "Investment Intern").id), ["killed", "rule", "r_notrole"], "investment");
+  eq(state(db, add(db, "Account Executive, Nordics").id), ["killed", "rule", "r_notrole"], "account executive");
+  eq(state(db, add(db, "VP, Consumer & Commercial").id), ["killed", "rule", "r_senior_hard"], "vp nguyên từ");
+  eq(state(db, add(db, "MVP Developer").id), ["new", null, null], "vp không dính MVP");
+  eq(state(db, add(db, "Backend Engineer").id), ["new", null, null], "kỹ sư thường vẫn vào");
+  // DB cũ: luật còn từ khóa cũ → v9 cập nhật; luật người đã sửa tay → giữ nguyên.
+  // :memory: không mở lại được, nên dùng file tạm: ghi từ khóa cũ, hạ user_version về 8, mở lại để v9 chạy.
+  const tmp = path.join(os.tmpdir(), `jobcheck-v9-${Date.now()}.db`);
+  try {
+    const f = openDb(tmp);
+    f.prepare("UPDATE rules SET match = ? WHERE id = 'r_senior_hard'").run("lead, principal, head of, director, staff engineer, architect, vp of, chief, manager");
+    f.prepare("UPDATE rules SET match = ? WHERE id = 'r_notrole'").run("sales, tao sửa tay");
+    f.pragma("user_version = 8");
+    f.close();
+    const g = openDb(tmp);
+    ok(C.getRule(g, "r_senior_hard").match.includes(", vp,"), "v9 cập nhật luật chưa sửa tay");
+    eq(C.getRule(g, "r_notrole").match, "sales, tao sửa tay", "v9 không đè luật đã sửa tay");
+    g.close();
+  } finally { fs.rmSync(tmp, { force: true }); fs.rmSync(tmp + "-wal", { force: true }); fs.rmSync(tmp + "-shm", { force: true }); }
+});
+
 check("luật ngôn ngữ qua đường nạp", () => {
   const db = openDb(":memory:");
   const a = add(db, "Ohjelmistokehittäjä", "Solita", { adLanguage: "fi" });
@@ -476,7 +501,8 @@ check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", ()
   const cases = {
     greenhouse: [JSON.stringify({ jobs: [{ id: 1, title: "Backend Engineer", absolute_url: "https://boards.greenhouse.io/wolt/jobs/1", location: { name: "Helsinki, Finland" }, updated_at: "2026-09-01T00:00:00Z", content: "&lt;p&gt;Hello &amp;amp; hi&lt;/p&gt;" }] }), "wolt"],
     lever: [JSON.stringify([{ id: "a", text: "Data Engineer", hostedUrl: "https://jobs.lever.co/x/a", categories: { location: "Helsinki" }, createdAt: 1756684800000, descriptionPlain: "JD" }]), "x"],
-    ashby: [JSON.stringify({ jobs: [{ id: "a", title: "SRE", jobUrl: "https://jobs.ashbyhq.com/x/a", location: "Helsinki", isRemote: true, publishedAt: "2026-09-01", descriptionHtml: "<p>JD</p>" }] }), "x"],
+    ashby: [JSON.stringify({ jobs: [{ id: "a", title: "SRE", jobUrl: "https://jobs.ashbyhq.com/x/a", location: "Helsinki", isRemote: true, publishedAt: "2026-09-01", descriptionHtml: "<p>JD</p>" },
+      { id: "b", title: "Unlisted TEST job", jobUrl: "https://jobs.ashbyhq.com/x/b", location: "Helsinki", isListed: false }] }), "x"],
     recruitee: [JSON.stringify({ offers: [{ id: 1, title: "Dev", careers_url: "https://x.recruitee.com/o/dev", city: "Espoo", country: "Finland", created_at: "2026-09-01", description: "<p>JD</p>" }] }), "x"],
     smartrecruiters: [JSON.stringify({ content: [{ id: "99", name: "QA Engineer", location: { city: "Tampere", country: "fi" }, releasedDate: "2026-09-01T00:00:00Z" }] }), "x"],
     workable: [JSON.stringify({ jobs: [{ title: "Frontend", shortcode: "AB", url: "https://apply.workable.com/x/j/AB", city: "Oulu", country: "Finland", published_on: "2026-09-01", description: "<p>JD</p>" }] }), "x"],
@@ -493,6 +519,7 @@ check("parse feed: 7 nền tảng, mỗi nền tảng ra title/location/url", ()
   }
   eq(parseFeed("greenhouse", cases.greenhouse[0], "wolt")[0].description, "Hello & hi", "greenhouse content giải mã hai lớp");
   eq(parseFeed("ashby", cases.ashby[0], "x")[0].location, "Helsinki, Remote", "ashby: gộp remote vào location");
+  eq(parseFeed("ashby", cases.ashby[0], "x").map((i) => i.title), ["SRE"], "ashby: tin isListed=false bị bỏ");
   eq(parseFeed("teamtailor", cases.teamtailor[0], "x")[0].location, "Tallinn, Estonia; Helsinki, Finland", "teamtailor: tt:location/tt:name, nhiều địa điểm");
   ok(parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2025-09-01") || parseFeed("lever", cases.lever[0], "x")[0].postedAt.startsWith("2026-09-01"), "lever: ms epoch");
   let threw = false;
@@ -863,12 +890,17 @@ await checkAsync("parser Claude: gọi đúng dạng, trả JSON, lọc tin thi�
   const fetchFn = async (url, init) => {
     seen = { url, init, body: JSON.parse(init.body) };
     return { ok: true, status: 200, json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ jobs: [
-      { title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1" },
+      { title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1", adLanguage: "en" },
+      { title: "Harjoitteluun Bravida Finlandille", company: "Bravida", location: "Vantaa", url: "https://lnkd.in/2", adLanguage: "fi" },
       { title: "", company: "X", location: "", url: "" },
     ] }) }] }) };
   };
   const items = await extractJobs("mail", { apiKey: "k", model: "claude-opus-5", fetchFn });
-  eq(items, [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1" }], "kết quả");
+  eq(items, [
+    { title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://lnkd.in/1", adLanguage: "en" },
+    { title: "Harjoitteluun Bravida Finlandille", company: "Bravida", location: "Vantaa", url: "https://lnkd.in/2", adLanguage: "fi" },
+  ], "kết quả, có adLanguage");
+  eq(seen.body.output_config.format.schema.properties.jobs.items.properties.adLanguage.enum, ["fi", "en"], "schema đòi adLanguage");
   eq(seen.url, "https://api.anthropic.com/v1/messages", "endpoint");
   eq(seen.init.headers["x-api-key"], "k", "key");
   eq(seen.init.headers["anthropic-version"], "2023-06-01", "version");
@@ -914,7 +946,7 @@ await checkAsync("bước IMAP: mỗi mail qua ingest + luật; mail đã xử l
   const extract = async (text) => {
     extracts++;
     if (text === "BOOM") throw new Error("Claude HTTP 500");
-    if (text === "M1") return [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://l/1" }, { title: "Sales Manager", company: "Wolt", location: "Helsinki", url: "https://l/2" }];
+    if (text === "M1") return [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://l/1" }, { title: "Sales Manager", company: "Wolt", location: "Helsinki", url: "https://l/2" }, { title: "Korkeakouluharjoittelu", company: "DNA", location: "Helsinki", url: "https://l/3", adLanguage: "fi" }];
     return [{ title: "Backend Engineer", company: "Wolt", location: "Helsinki", url: "https://d/1" }];
   };
   const env = { IMAP_USER: "me@gmail.com", IMAP_APP_PASSWORD: "p", ANTHROPIC_API_KEY: "k" };
@@ -924,7 +956,8 @@ await checkAsync("bước IMAP: mỗi mail qua ingest + luật; mail đã xử l
   p.start(); const s = await p.wait();
   const li = s.results.find((r) => r.name === "LinkedIn");
   const du = s.results.find((r) => r.name === "Duunitori");
-  eq([li.kind, li.mails, li.added, li.auto, li.error], ["imap", 1, 2, 1, "Claude HTTP 500"], "LinkedIn: 1 mail xong, 1 mail hỏng");
+  eq([li.kind, li.mails, li.added, li.auto, li.error], ["imap", 1, 3, 2, "Claude HTTP 500"], "LinkedIn: 1 mail xong, 1 mail hỏng");
+  eq(state(db, one(db, "SELECT id FROM jobs WHERE title = 'Korkeakouluharjoittelu'").id), ["doubt", "rule", "r_lang"], "adLanguage fi từ Claude → luật ngôn ngữ bắt, dù tiêu đề không có ä/ö");
   eq([du.mails, du.added, du.dup], [1, 0, 1], "Duunitori: trùng → gộp kênh");
   eq(J.listJobs(db).find((j) => j.title === "Backend Engineer").channels, ["LinkedIn", "Duunitori"], "hai kênh");
   eq(one(db, "SELECT COUNT(*) n FROM mail_seen").n, 2, "mail hỏng không được đánh dấu");
@@ -938,7 +971,7 @@ await checkAsync("bước IMAP: mỗi mail qua ingest + luật; mail đã xử l
   p.start(); await p.wait();
   eq(fetched[1], ["<m3@linkedin>"], "lần hai chỉ còn mail hỏng lần trước");
   eq(extracts, 4, "không gọi Claude lại cho mail đã xử lý");
-  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 2, "không nạp lại");
+  eq(one(db, "SELECT COUNT(*) n FROM jobs").n, 3, "không nạp lại");
   invariants(db);
 });
 

@@ -58,7 +58,8 @@ export function mailText({ html, text }) {
 const SYSTEM = `You extract job postings from job-alert emails sent by job boards (LinkedIn, Duunitori, Oikotie, The Hub, Jobly, EngRadar, ...).
 The email text is given as plain text; links appear as "anchor text (https://url)".
 Return every job posting that appears in the email. For each: the job title, the employer/company name, the location as written, and the URL of the link that leads to that posting (a tracking link is fine; keep it exactly as written).
-Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.`;
+Do not invent postings. Skip navigation, unsubscribe links, ads for the board itself, and "similar jobs" that have no title. If a field is unknown, use an empty string.
+adLanguage: "fi" if the posting's title or its text in the email is written in Finnish, otherwise "en".`;
 
 const SCHEMA = {
   type: "object",
@@ -72,8 +73,9 @@ const SCHEMA = {
           company: { type: "string" },
           location: { type: "string" },
           url: { type: "string" },
+          adLanguage: { type: "string", enum: ["fi", "en"] },
         },
-        required: ["title", "company", "location", "url"],
+        required: ["title", "company", "location", "url", "adLanguage"],
         additionalProperties: false,
       },
     },
@@ -122,6 +124,7 @@ export async function extractJobs(text, { apiKey, model = DEFAULT_MODEL, fetchFn
     company: String(j.company ?? "").trim(),
     location: String(j.location ?? "").trim() || null,
     url: String(j.url ?? "").trim() || null,
+    adLanguage: j.adLanguage === "fi" ? "fi" : "en",
   })).filter((j) => j.title && j.company);
 }
 
@@ -191,7 +194,8 @@ export function createImapStep({ env = process.env, fetchMails = fetchAlertMails
       const r = row(channel);
       const source = `imap:${norm(channel)}`;
       try {
-        const items = (await extract(mail.text, cfg)).map((it) => ({ ...it, adLanguage: guessLanguage(it.title, "") }));
+        // Claude đọc cả nội dung tin trong mail nên biết ngôn ngữ; tiêu đề có ä/ö vẫn là lưới đỡ.
+        const items = (await extract(mail.text, cfg)).map((it) => ({ ...it, adLanguage: it.adLanguage === "fi" || guessLanguage(it.title, "") === "fi" ? "fi" : "en" }));
         const counts = jobs.ingest(db, items, { source, channel });
         config.markMailSeen(db, mail.key, source, items.length);
         r.mails++;

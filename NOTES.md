@@ -88,3 +88,18 @@ Bốn commit: detect-ats + ats, pull + UI, imap, cảnh báo nguồn chết. `np
 - **Aiven**: trang tin lẻ nhúng Greenhouse. Cách dò tiếp: mở một trang `aiven.io/careers/job/...?gh_jid=...`, tìm script `boards.greenhouse.io/embed/job_app?for=<token>` hoặc `job_board/js?for=<token>`. Chưa làm.
 - **SmartRecruiters** trả tối đa `limit=100`; Konecranes đúng 100 tin nên feed thật có thể nhiều hơn. Cần phân trang bằng `offset` trong `ats.js`. TietoEVRY ra `smartrecruiters:my-applications` với 0 tin — token rác lấy từ link HTML, ứng viên đó là Sai.
 - Script dò cần **log giờ bắt đầu và thời gian từng công ty**; run đầu chỉ có tổng (46 công ty ≈ 30 phút, ~40 giây/công ty).
+
+## 2026-09-18 — 30 tin lọt qua luật, xem xét hàng đọc
+
+Không ghi từng tin. Ghi theo mẫu:
+
+| Mẫu | Số tin | Ví dụ | Sửa |
+|---|---|---|---|
+| Vai trò ngoài ngành, r_notrole không có từ | 10 | Legal Counsel, Electrical Engineer, Investment Intern | thêm: legal, analyst, mechanical, electrical, communications, coordinator, partner, artist, investment, account executive |
+| Tiếng Phần Lan từ email, adLanguage không set | 6 | Harjoitteluun Bravida, Korkeakouluharjoittelu DNA | imap.js: Claude trả thêm adLanguage |
+| Senior title lọt | 1 | VP, Consumer & Commercial | vp nguyên từ thay vp of |
+| Ngôn ngữ khác trong title/JD | 3 | Ingeniero de Seguridad, DACH German-speaking, Serbian | luật title: german-speaking, spanish, serbian → doubt |
+| Tin đã đóng (ATS) | 5 | Supercell ×5 | closed_at tự bắt lần kéo sau, xác minh |
+| Tin hết hạn (email) | 3 | Kalmar, NoA, LähiTapiola | chờ bước 5 |
+
+Bài học: 30 tin này đều loại được bằng tiêu đề. Đã mở 30 link — sai quy trình.
