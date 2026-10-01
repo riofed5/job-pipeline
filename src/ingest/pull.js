@@ -12,6 +12,7 @@ import * as config from "../core/config.js";
 import { fingerprint } from "../core/dedupe.js";
 import { fetchAts as realFetchAts, filterLocation, applyUrlTemplate } from "./ats.js";
 import { imapConfigured, createImapStep } from "./imap.js";
+import { repliesConfigured, createRepliesStep } from "./replies.js";
 import { summarize } from "./summary.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -25,8 +26,11 @@ export function loadEnv() {
   try { process.loadEnvFile(path.join(ROOT, ".env")); } catch { /* không có .env thì thôi */ }
 }
 
-/* Nguồn ngoài ATS đang cấu hình: IMAP khi đủ biến môi trường. */
-export const defaultExtra = () => (imapConfigured() ? [createImapStep()] : []);
+/* Nguồn ngoài ATS đang cấu hình: IMAP khi đủ biến môi trường; phản hồi (bước 3b) cùng điều kiện, chạy sau. */
+export const defaultExtra = () => [
+  ...(imapConfigured() ? [createImapStep()] : []),
+  ...(repliesConfigured() ? [createRepliesStep()] : []),
+];
 
 export function createPuller(db, { fetchAts = realFetchAts, extra = defaultExtra(), gapMs = 1000, staleMs = STALE_MS, log = () => {} } = {}) {
   let running = false;
@@ -133,7 +137,9 @@ async function main() {
   const db = openDb(path.join(process.env.DATA_DIR || path.join(ROOT, "data"), "jobs.db"));
   jobs.backfillAppliedAt(db);
   const puller = createPuller(db, {
-    log: (r) => console.log(`${(r.name ?? "").padEnd(28)} ${r.error ? `LỖI ${r.error}` : r.kind === "imap"
+    log: (r) => console.log(`${(r.name ?? "").padEnd(28)} ${r.error ? `LỖI ${r.error}` : r.kind === "replies"
+      ? `${r.companies} công ty · ${r.mails} mail mới · ${r.calls} lần gọi Claude · ${r.proposals} đề xuất`
+      : r.kind === "imap"
       ? `${r.mails} mail · ${r.added} mới · ${r.dup} trùng`
       : `${r.total ?? "-"} tin · ${r.kept ?? "-"} giữ · ${r.dropped ?? "-"} ngoài phạm vi · ${r.added} mới · ${r.dup} trùng${r.notModified ? " (không đổi)" : ""}`}`),
   });

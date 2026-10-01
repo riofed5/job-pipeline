@@ -191,6 +191,45 @@ const MIGRATIONS = [
     if (!has("events", "from_outcome")) db.exec("ALTER TABLE events ADD COLUMN from_outcome TEXT");
     if (!has("events", "to_outcome")) db.exec("ALTER TABLE events ADD COLUMN to_outcome TEXT");
   },
+  /* v13 — phản hồi của công ty (replies.js). Mail tìm được theo tên công ty lưu ở reply_mails để UI hiện bằng
+     chứng không cần IMAP; một mail có thể khớp nhiều công ty nên khóa là (message_id, company_key).
+     replies là ĐỀ XUẤT của Claude — không đụng jobs; chỉ khi người Xác nhận (jobs.confirmReply) tin mới đổi.
+     reply_runs nhớ hash đầu vào mỗi công ty để không gọi Claude lại khi không có gì mới.
+     companies.aliases: tên khác (phân cách bằng dấu phẩy) dùng thêm trong IMAP SEARCH. */
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS reply_mails (
+        message_id  TEXT NOT NULL,
+        company_key TEXT NOT NULL,                 -- norm(tên công ty trên tin)
+        from_addr   TEXT,
+        subject     TEXT,
+        date        TEXT,
+        text        TEXT,                          -- đã cắt, không link
+        fetched_at  TEXT NOT NULL,
+        PRIMARY KEY (message_id, company_key)
+      );
+      CREATE TABLE IF NOT EXISTS reply_runs (
+        company_key TEXT PRIMARY KEY,
+        input_hash  TEXT NOT NULL,
+        ran_at      TEXT NOT NULL,
+        mails       INTEGER NOT NULL DEFAULT 0,
+        proposals   INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS replies (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id              TEXT NOT NULL REFERENCES jobs(id),
+        company_key         TEXT NOT NULL,
+        status              TEXT NOT NULL CHECK (status IN ('no_reply','ack','rejection','interview','assessment','other')),
+        evidence_message_id TEXT,                  -- phải nằm trong reply_mails của công ty đó lúc đề xuất
+        note                TEXT,
+        proposed_at         TEXT NOT NULL,
+        resolution          TEXT CHECK (resolution IN ('confirmed','wrong')),
+        resolved_at         TEXT
+      );
+      CREATE INDEX IF NOT EXISTS replies_job ON replies(job_id);
+    `);
+    if (!db.pragma("table_info(companies)").some((c) => c.name === "aliases")) db.exec("ALTER TABLE companies ADD COLUMN aliases TEXT");
+  },
 ];
 
 export function openDb(file) {
@@ -211,7 +250,7 @@ export function openDb(file) {
 
 /* Dump mọi bảng cho nút "Tải file sao lưu". Đây là file sao lưu, không phải màn hình — có description. */
 export function exportAll(db) {
-  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings", "mail_seen"];
+  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings", "mail_seen", "reply_mails", "reply_runs", "replies"];
   return {
     exportedAt: now(),
     schemaVersion: db.pragma("user_version", { simple: true }),

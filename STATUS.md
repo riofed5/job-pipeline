@@ -7,7 +7,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 1 | Schema, luật, UI port, nạp tay | Xong, dùng thật 2 ngày | 2026-09-14 |
 | 2 | `detect-ats.js` + `ats.js` + `pull.js` + tự kéo sau 12 giờ + Kéo ngay | **Xong** | 2026-09-16 |
 | 3 | `imap.js` + parser bằng Claude | **Xong**, đã kéo thật 11 mail LinkedIn | 2026-09-17 |
-| 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp (1/3) · `replies.js` (2/3) · tab Phản hồi + aliases (3/3) | **Đang làm**, xong 1/3 | 2026-10-01 |
+| 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp (1/3) · `replies.js` (2/3) · tab Phản hồi + aliases (3/3) | **Đang làm**, xong 2/3 | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
 | 5 | `enrich.js` | Chưa | |
 | 6 | Cron + bảng theo dõi | Chưa | |
@@ -28,7 +28,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Ashby**: feed trả cả tin `isListed: false` (tin đã gỡ, kể cả "Unlisted TEST job"); parser bỏ chúng nên `closed_at` bắt được.
 - **Luật mẫu thêm sau bước 1** (seed cho DB mới, migration cho DB đang dùng): `r_abroad` — location chứa `us, gb, uk, pl, de, se, dk, ca, india, norway` → loại (không dùng `in`, `no` vì trùng từ tiếng Anh); `r_openapp` — title chứa `open application, avoin hakemus, general application, spontaneous application` → Ngờ vực; `r_otherlang` — title chứa `german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare` → Ngờ vực (dấu * vì tiếng Đức/Thụy Điển ghép từ). Luật loại thắng luật Ngờ vực khi cả hai khớp.
 - **`jobs.deadline`**: cột có, để trống tới bước 5. Mỗi thùng có nút xếp: mới thêm (mặc định) / cũ nhất / deadline gần nhất, trống xếp cuối. Hộp đến và Rà soát không có nút xếp.
-- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 58 kịch bản. Schema v12.
+- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 64 kịch bản. Schema v13.
 
 ## Bước 3b có gì (1/3 — sau khi nộp)
 
@@ -37,7 +37,15 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **`jobs.applied_at`**: ghi lúc bước vào `applied`; đổi outcome không đụng. Bốn thùng sau khi nộp hiện "nộp N ngày trước". Tin nộp trước v12 được `jobs.backfillAppliedAt` điền từ events lúc server/CLI mở DB (db.js không được ghi vào jobs); 17/17 tin thật có ngày.
 - **`events.from_outcome` / `to_outcome`**: đổi outcome cũng là một event, U hoàn tác được (ứng viên U so cả outcome). `POST /api/jobs/:id/status` nhận thêm `outcome`; outcome kèm status khác `applied` → 400.
 - Bảng năng suất ở tab Nguồn thêm cột **Phỏng vấn** (= interview + offer). `archiveStale`, `rerunRules`, `toggleRule` không đụng tin đã nộp — có kịch bản kiểm.
-- Còn lại của 3b: `replies.js` (IMAP SEARCH theo tên công ty, một lần gọi Claude mỗi công ty, bảng `replies`, chạy trong pull chung), tab Phản hồi với Xác nhận / Sai là đường duy nhất replies đụng jobs, `companies.aliases`.
+
+## Bước 3b có gì (2/3 — replies.js)
+
+- **Schema v13**: `reply_mails` (khóa `message_id + company_key`, một mail có thể khớp nhiều công ty; text đã cắt 4000 ký tự, không link), `replies` (đề xuất: `status` no_reply/ack/rejection/interview/assessment/other, `evidence_message_id`, `note`, `resolution` confirmed/wrong), `reply_runs` (hash đầu vào mỗi công ty), `companies.aliases` (cột có, ô nhập ở 3/3). Export kèm ba bảng.
+- **`src/ingest/replies.js`**: với mỗi công ty có tin ở Đã nộp / Phỏng vấn (Từ chối, Offer không theo dõi nữa): IMAP SEARCH trên `[Gmail]/All Mail` (`IMAP_REPLIES_MAILBOX`; không có folder thì INBOX) `SINCE` ngày nộp sớm nhất, `TEXT` tên công ty `OR` tên khác. Không nhãn, không lọc người gửi, chỉ đọc. Đã thử thật: Reaktor 4 mail, Hoxhunt 3, Oura 0. Trần 60 mail mới nhất mỗi công ty, vượt thì ghi `note` (không phải lỗi).
+- **Một lần gọi Claude mỗi công ty**, json_schema, không `effort`. Đầu vào: hồ sơ `{id, title, applied_at, stage}` + mail `{message_id, from, subject, date, text}`; không có mô tả công việc. Đầu ra lọc: `job_id` phải là hồ sơ đã gửi, `evidence_message_id` phải là mail đã gửi (không thì null), mỗi hồ sơ một kết quả. Hash (hồ sơ + message_id) giống lần trước → không gọi.
+- **Đề xuất, không quyết định**: `replies.js` không import `jobs.js`, không có SQL ghi vào jobs; kịch bản kiểm so `jobs` + `events` trước và sau từng byte. Đề xuất y hệt một dòng đã có (kể cả đã bảo Sai) không ghi lại — đây là cách "Sai" không quay lại ở lần kéo sau.
+- **`src/core/replies.js`**: đọc/ghi ba bảng trên; `listPending` = đề xuất mới nhất của mỗi tin, chưa xử lý, không phải no_reply, kèm mail bằng chứng; `resolveReply` chỉ ghi `resolution`. Chạy trong `createPuller` sau IMAP, cùng điều kiện cấu hình; CLI in `N công ty · N mail mới · N lần gọi Claude · N đề xuất`.
+- Còn lại của 3b (3/3): `jobs.confirmReply` (đường duy nhất replies đụng jobs: rejection → rejected, interview/assessment → interview, còn lại chỉ đánh dấu), `GET /api/replies`, `POST /api/replies/:id/confirm|wrong`, tab Phản hồi, ô `aliases` ở tab Công ty, hiện `note` của bước phản hồi trong kết quả kéo.
 
 ## Còn mở
 

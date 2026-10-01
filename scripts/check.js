@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { openDb, createBackups } from "../src/core/db.js";
 import * as J from "../src/core/jobs.js";
 import * as C from "../src/core/config.js";
-import { fingerprint } from "../src/core/dedupe.js";
+import { fingerprint, norm } from "../src/core/dedupe.js";
 import { compileRules, compileTerm, evaluate } from "../src/core/rules.js";
 import { manualSource } from "../src/ingest/normalize.js";
 import { htmlToText } from "../src/ingest/html.js";
@@ -19,6 +19,9 @@ import { guessFromUrl, guessFromHtml, detectAts } from "../src/ingest/detect-ats
 import { createPuller, atsSource } from "../src/ingest/pull.js";
 import { summarize } from "../src/ingest/summary.js";
 import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep, imapConfigured, fetchAlertMails, buildRequest, parseJobsJson } from "../src/ingest/imap.js";
+import * as R from "../src/core/replies.js";
+import { searchQuery, fetchCompanyMails, assessReplies, buildRepliesRequest, createRepliesStep, repliesConfig } from "../src/ingest/replies.js";
+import { exportAll } from "../src/core/db.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -1151,6 +1154,192 @@ await checkAsync("fetchAlertMails: cửa sổ 14 ngày, envelope trước rồi 
 
 check("imap.js không xóa, không expunge, không đổi cờ mail", () => {
   eq(scanSrc(/messageDelete|expunge|messageFlagsAdd|messageFlagsSet|messageMove|\\Deleted|\\Seen/), [], "chỗ đụng hộp thư");
+});
+
+/* ============================ bước 3b: phản hồi ============================ */
+
+check("v13: bảng replies, reply_mails, reply_runs có mặt và được xuất; companies.aliases; hồ sơ theo dõi gom theo công ty", () => {
+  const db = openDb(":memory:");
+  const dump = exportAll(db);
+  eq(["replies", "reply_mails", "reply_runs"].filter((t) => Array.isArray(dump[t])), ["replies", "reply_mails", "reply_runs"], "export đủ ba bảng");
+  ok(db.pragma("table_info(companies)").some((c) => c.name === "aliases"), "companies.aliases");
+  const a = add(db, "Backend Engineer", "Reaktor");
+  const b = add(db, "Data Engineer", "Reaktor");
+  const c = add(db, "Platform Engineer", "Wolt");
+  const d = add(db, "SRE", "Wolt");
+  const e = add(db, "Dev", "Oura");
+  J.decide(db, a.id, "applied");
+  J.decide(db, b.id, "applied", "interview");
+  J.decide(db, c.id, "applied", "rejected"); // không theo dõi nữa
+  J.decide(db, d.id, "applied", "offer");    // không theo dõi nữa
+  J.decide(db, e.id, "queue");
+  const groups = R.trackedApplications(db);
+  eq(groups.map((g) => [g.name, g.applications.length]), [["Reaktor", 2]], "chỉ Reaktor, 2 hồ sơ");
+  eq(groups[0].since, job(db, a.id).applied_at, "since = ngày nộp sớm nhất");
+  eq(groups[0].key, "reaktor", "khóa = norm(tên)");
+  const co = C.addCompany(db, { name: "Reaktor" }).company;
+  db.prepare("UPDATE companies SET aliases = ? WHERE id = ?").run(" Reaktor Group, reaktor.com ,", co.id);
+  eq(R.aliasesFor(db, "Reaktor"), ["Reaktor Group", "reaktor.com"], "tên khác tách theo dấu phẩy, bỏ rỗng");
+  eq(R.aliasesFor(db, "Nokia"), [], "công ty không có dòng → không tên khác");
+});
+
+check("searchQuery: SINCE ngày nộp; một tên → TEXT; nhiều tên → OR; trùng và rỗng bị bỏ", () => {
+  const q1 = searchQuery({ since: "2026-09-20T00:00:00Z", terms: ["Reaktor"] });
+  ok(q1.since instanceof Date && q1.text === "Reaktor" && !q1.or, JSON.stringify(q1));
+  const q2 = searchQuery({ since: "2026-09-20T00:00:00Z", terms: ["Reaktor", " Reaktor Group ", "", "Reaktor"] });
+  eq(q2.or, [{ text: "Reaktor" }, { text: "Reaktor Group" }], "OR hai tên");
+  ok(!("text" in q2), "không có text lẻ khi dùng OR");
+  eq(repliesConfig({ IMAP_USER: "u" }).mailbox, "[Gmail]/All Mail", "hộp thư mặc định");
+  eq(repliesConfig({ IMAP_REPLIES_MAILBOX: "INBOX" }).mailbox, "INBOX", "đổi được qua env");
+});
+
+await checkAsync("fetchCompanyMails: SEARCH rồi envelope rồi source của mail chưa lưu; trần lấy mail mới nhất; không đụng cờ", async () => {
+  const calls = [];
+  const box = {
+    7: { messageId: "<ack@reaktor>", from: [{ address: "no-reply@reaktor.com", name: "Reaktor" }], date: new Date(), subject: "We received your application" },
+    8: { messageId: "<old@x>", from: [{ address: "a@x" }], date: new Date(), subject: "s" },
+    9: { messageId: "<alert@linkedin>", from: [{ address: "jobs@linkedin.com" }], date: new Date(), subject: "Reaktor is hiring" },
+  };
+  const client = {
+    search: async (q, opts) => { calls.push(`search:${q.text}:since=${q.since instanceof Date}:uid=${opts.uid}`); return [3, 7, 8, 9]; },
+    fetch: async function* (range, q, opts) {
+      calls.push(`fetch:${range.join(",")}:env=${Boolean(q.envelope)}:uid=${opts.uid}`);
+      for (const uid of range) yield { uid, envelope: box[uid] };
+    },
+    fetchOne: async (uid) => {
+      calls.push(`one:${uid}`);
+      return { source: Buffer.from(`From: Reaktor <no-reply@reaktor.com>
+Subject: ${box[uid].subject}
+Message-ID: ${box[uid].messageId}
+Content-Type: text/html
+
+<p>Hi, <a href="https://x">thanks</a> for applying.</p>${"x".repeat(5000)}`) };
+    },
+    messageFlagsAdd: () => { throw new Error("không được đụng cờ"); },
+  };
+  const r = await fetchCompanyMails(client, { since: "2026-09-20T00:00:00Z", terms: ["Reaktor"], skip: (k) => k === "<old@x>", max: 3 });
+  eq([r.found, r.capped], [4, true], "4 khớp, bị trần");
+  eq(r.mails.map((m) => m.messageId), ["<ack@reaktor>", "<alert@linkedin>"], "mail đã lưu không tải lại");
+  eq(r.mails[0].from, "Reaktor no-reply@reaktor.com", "from gồm tên và địa chỉ");
+  ok(r.mails[0].text.startsWith("Hi, thanks for applying.") && !r.mails[0].text.includes("https://x"), "chữ không link");
+  ok(r.mails[0].text.length <= 4000, "cắt 4000 ký tự");
+  eq(calls, ["search:Reaktor:since=true:uid=true", "fetch:7,8,9:env=true:uid=true", "one:7", "one:9"], "thứ tự gọi");
+  const empty = { search: async () => false, fetch: () => { throw new Error("không được fetch khi SEARCH rỗng"); } };
+  eq(await fetchCompanyMails(empty, { since: "2026-09-20", terms: ["X"] }), { mails: [], found: 0, capped: false }, "SEARCH trả false → rỗng");
+});
+
+await checkAsync("assessReplies: body đúng dạng, không effort; lọc job_id lạ, evidence lạ → null, mỗi hồ sơ một kết quả", async () => {
+  let seen;
+  const fetchFn = async (url, init) => {
+    seen = { url, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ results: [
+      { job_id: "j1", status: "interview", evidence_message_id: "<m1>", note: "Let's schedule a call" },
+      { job_id: "j1", status: "ack", evidence_message_id: "<m1>", note: "dup" },
+      { job_id: "j2", status: "rejection", evidence_message_id: "<made-up>", note: "" },
+      { job_id: "zzz", status: "ack", evidence_message_id: "<m1>", note: "" },
+      { job_id: "j3", status: "no_reply", evidence_message_id: "", note: "" },
+    ] }) }] }) };
+  };
+  const applications = [{ id: "j1", title: "Backend", appliedAt: "2026-09-20", outcome: null }, { id: "j2", title: "Data", appliedAt: "2026-09-21", outcome: "interview" }, { id: "j3", title: "SRE", appliedAt: "2026-09-22", outcome: null }];
+  const mails = [{ messageId: "<m1>", from: "a", subject: "s", date: "d", text: "t" }];
+  const res = await assessReplies({ company: "Reaktor", applications, mails }, { apiKey: "k", model: "m", fetchFn });
+  eq(res, [
+    { jobId: "j1", status: "interview", evidence: "<m1>", note: "Let's schedule a call" },
+    { jobId: "j2", status: "rejection", evidence: null, note: "" },
+    { jobId: "j3", status: "no_reply", evidence: null, note: "" },
+  ], "kết quả đã lọc");
+  eq(Object.keys(seen.body).sort(), ["max_tokens", "messages", "model", "output_config", "system"], "khóa của body");
+  ok(!JSON.stringify(seen.body).includes('"effort"'), "không effort");
+  eq(seen.body.output_config.format.type, "json_schema", "ép JSON");
+  const input = JSON.parse(seen.body.messages[0].content);
+  eq(input.applications[1].stage, "interview", "giai đoạn hiện tại đi kèm hồ sơ");
+  eq(input.emails[0].message_id, "<m1>", "mail đi kèm message_id");
+  ok(!JSON.stringify(buildRepliesRequest({ company: "x", applications: [], mails: [] }, "m")).includes("description"), "không có mô tả công việc trong đầu vào");
+  let err = "";
+  try { await assessReplies({ company: "x", applications, mails }, { apiKey: "" }); } catch (e) { err = e.message; }
+  ok(/ANTHROPIC_API_KEY/.test(err), "thiếu key");
+});
+
+await checkAsync("bước phản hồi: tên khác vào SEARCH, mail lưu, đề xuất ghi, jobs/events KHÔNG đổi; cùng đầu vào không gọi lại; đề xuất Sai không quay lại", async () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer", "Reaktor");
+  const b = add(db, "Data Engineer", "Reaktor");
+  const c = add(db, "SRE", "Wolt");
+  J.decide(db, a.id, "applied");
+  J.decide(db, b.id, "applied", "interview");
+  J.decide(db, c.id, "applied");
+  const co = C.addCompany(db, { name: "Reaktor" }).company;
+  db.prepare("UPDATE companies SET aliases = 'Reaktor Group' WHERE id = ?").run(co.id);
+  const snapshot = () => JSON.stringify([db.prepare("SELECT * FROM jobs ORDER BY id").all(), db.prepare("SELECT * FROM events ORDER BY id").all()]);
+  const before = snapshot();
+
+  const calls = [];
+  const makeClient = () => ({
+    connect: async () => calls.push("connect"),
+    getMailboxLock: async (name) => { calls.push(`lock:${name}`); if (name !== "INBOX") throw new Error("no such mailbox"); return { release: () => calls.push("release") }; },
+    logout: async () => calls.push("logout"),
+  });
+  const inbox = { reaktor: [{ messageId: "<m1>", from: "Reaktor", subject: "Interview", date: "2026-09-25T10:00:00Z", text: "Let's talk" }], wolt: [] };
+  const searched = [];
+  const fetchMails = async (client, { since, terms, skip }) => {
+    searched.push({ terms, since });
+    const key = norm(terms[0]);
+    return { mails: inbox[key].filter((m) => !skip(m.messageId)), found: inbox[key].length, capped: false };
+  };
+  let assessed = [];
+  const assess = async ({ company, applications, mails }) => {
+    assessed.push([company, applications.length, mails.length]);
+    if (company !== "Reaktor") return applications.map((x) => ({ jobId: x.id, status: "no_reply", evidence: null, note: "" }));
+    return [
+      { jobId: a.id, status: "interview", evidence: "<m1>", note: "Let's talk" },
+      { jobId: b.id, status: "no_reply", evidence: null, note: "" },
+    ];
+  };
+  const env = { IMAP_USER: "me@gmail.com", IMAP_APP_PASSWORD: "p", ANTHROPIC_API_KEY: "k" };
+  const step = createRepliesStep({ env, makeClient, fetchMails, assess });
+  const p = createPuller(db, { fetchAts: async () => feedOf([]), extra: [step], gapMs: 0 });
+  p.start(); let s = await p.wait();
+  const r = s.results.find((x) => x.kind === "replies");
+  eq([r.companies, r.mails, r.calls, r.proposals, r.error], [2, 1, 2, 1, null], "kết quả lần 1");
+  eq(searched.map((x) => x.terms), [["Reaktor", "Reaktor Group"], ["Wolt"]], "tên khác vào SEARCH");
+  eq(searched[0].since, job(db, a.id).applied_at, "SINCE ngày nộp sớm nhất");
+  eq(calls, ["connect", "lock:[Gmail]/All Mail", "lock:INBOX", "release", "logout"], "không có All Mail → INBOX; luôn logout");
+  eq(one(db, "SELECT COUNT(*) n FROM reply_mails").n, 1, "mail lưu");
+  eq(db.prepare("SELECT job_id, status, evidence_message_id FROM replies ORDER BY id").all(),
+    [{ job_id: a.id, status: "interview", evidence_message_id: "<m1>" }, { job_id: b.id, status: "no_reply", evidence_message_id: null }, { job_id: c.id, status: "no_reply", evidence_message_id: null }], "đề xuất");
+  eq(snapshot(), before, "jobs và events không đổi một byte");
+  eq([job(db, a.id).status, job(db, a.id).outcome], ["applied", null], "tin a vẫn Đã nộp — Claude không đổi trạng thái");
+
+  // Lần 2: không gì mới → không gọi Claude, không đề xuất thêm.
+  p.start(); s = await p.wait();
+  eq(assessed.length, 2, "không gọi lại");
+  eq(one(db, "SELECT COUNT(*) n FROM replies").n, 3, "không ghi thêm");
+
+  // Người bảo Sai. Mail mới tới → gọi lại; Claude lặp đề xuất cũ → không quay lại; đề xuất khác thì ghi.
+  const pending = R.listPending(db);
+  eq(pending.map((x) => [x.jobId, x.status, x.evidence?.subject]), [[a.id, "interview", "Interview"]], "chờ xử lý: chỉ đề xuất thật, kèm mail");
+  ok(R.resolveReply(db, pending[0].id, "wrong"), "ghi Sai");
+  ok(!R.resolveReply(db, pending[0].id, "confirmed"), "đã xử lý thì không ghi lại");
+  inbox.reaktor.push({ messageId: "<m2>", from: "Reaktor", subject: "Unfortunately", date: "2026-09-26T10:00:00Z", text: "we will not proceed" });
+  assessed = [];
+  const step2 = createRepliesStep({ env, makeClient, fetchMails, assess: async ({ applications }) => [
+    { jobId: a.id, status: "interview", evidence: "<m1>", note: "lặp lại" },
+    { jobId: b.id, status: "rejection", evidence: "<m2>", note: "we will not proceed" },
+  ] });
+  const p2 = createPuller(db, { fetchAts: async () => feedOf([]), extra: [step2], gapMs: 0 });
+  p2.start(); s = await p2.wait();
+  eq(s.results.find((x) => x.kind === "replies").proposals, 1, "chỉ đề xuất mới được tính");
+  eq(R.listPending(db).map((x) => [x.jobId, x.status]), [[b.id, "rejection"]], "đề xuất bị bảo Sai không quay lại; đề xuất mới hiện");
+  eq(snapshot(), before, "jobs và events vẫn không đổi");
+  invariants(db);
+});
+
+check("replies.js (core và ingest) không gọi decide/writeStatus, không có SQL ghi vào jobs", () => {
+  for (const f of ["src/core/replies.js", "src/ingest/replies.js"]) {
+    const src = fs.readFileSync(path.join(ROOT, f), "utf8");
+    ok(!/\bdecide\(|writeStatus\(|confirmReply\(/.test(src), `${f} đụng đường đổi trạng thái tin`);
+    ok(!/from "\.\.?\/(core\/)?jobs\.js"/.test(src), `${f} import jobs.js`);
+  }
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");
