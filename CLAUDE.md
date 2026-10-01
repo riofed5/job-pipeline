@@ -5,16 +5,17 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 
 ---
 
-## BƯỚC HIỆN TẠI: 2
+## BƯỚC HIỆN TẠI: 3b — phản hồi
 
-**Chỉ được làm bước 2 và 3 trong mục 8 của SPEC.md:** detect-ats.js, ats.js, imap.js,
-POST /api/pull, tự kéo khi mở app nếu quá 12 tiếng.
+**Chỉ được làm:** cột jobs.outcome sau applied, replies.js, tab Phản hồi,
+companies.aliases, thùng Phỏng vấn / Từ chối / Offer trên rail.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
-- `tmt.js`, `websearch.js`, `enrich.js`
+- `enrich.js`, `websearch.js`, `tmt.js`
 - cron, scheduler, background job có timer
 - Docker, CI, deploy
+- CHECK của jobs.status — không nới, không DROP TABLE, không tắt FK
 
 Nếu thấy một trong số đó cần thiết, **nói ra và dừng lại**. Đừng tự làm.
 
