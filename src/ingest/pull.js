@@ -131,6 +131,7 @@ async function main() {
   loadEnv();
   const { openDb } = await import("../core/db.js");
   const db = openDb(path.join(process.env.DATA_DIR || path.join(ROOT, "data"), "jobs.db"));
+  jobs.backfillAppliedAt(db);
   const puller = createPuller(db, {
     log: (r) => console.log(`${(r.name ?? "").padEnd(28)} ${r.error ? `LỖI ${r.error}` : r.kind === "imap"
       ? `${r.mails} mail · ${r.added} mới · ${r.dup} trùng`

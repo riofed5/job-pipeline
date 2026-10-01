@@ -31,7 +31,7 @@ export const api = {
   exportAll: () => send("GET", "/api/export"),
 
   ingest: (source, items) => send("POST", "/api/ingest", { source, items }),
-  decide: (id, status) => send("POST", `/api/jobs/${encodeURIComponent(id)}/status`, { status }),
+  decide: (id, status, outcome = null) => send("POST", `/api/jobs/${encodeURIComponent(id)}/status`, { status, outcome }),
   undo: () => send("POST", "/api/undo"),
   archiveStale: () => send("POST", "/api/archive-stale"),
 

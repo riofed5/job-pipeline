@@ -12,15 +12,23 @@ import { SORTS, sortJobs } from "./sort.js";
    Nguyên tắc: không có gì bị xóa. Loại = ẩn, không phải mất.
    ============================================================ */
 
+/* Một thùng = status, trừ bốn thùng sau khi nộp: status vẫn là applied, tách theo outcome.
+   Mọi tin khớp đúng một thùng — binOf() là chỗ duy nhất quyết định điều đó. */
 const BINS = [
   { id: "new", label: "Hộp đến", hint: "chờ phân loại" },
   { id: "queue", label: "Hàng đọc", hint: "chắc chắn liên quan" },
   { id: "maybe", label: "Có thể", hint: "rà soát định kỳ" },
   { id: "doubt", label: "Ngờ vực", hint: "loại nhưng chưa chắc" },
-  { id: "applied", label: "Đã nộp", hint: "" },
+  { id: "applied", label: "Đã nộp", hint: "chờ phản hồi", status: "applied", outcome: null },
+  { id: "interview", label: "Phỏng vấn", hint: "", status: "applied", outcome: "interview" },
+  { id: "offer", label: "Offer", hint: "", status: "applied", outcome: "offer" },
+  { id: "rejected", label: "Từ chối", hint: "", status: "applied", outcome: "rejected" },
   { id: "killed", label: "Đã loại", hint: "" },
   { id: "archived", label: "Lưu trữ", hint: "quá hạn" },
 ];
+const binOf = (j) => (j.status === "applied" ? BINS.find((b) => b.status === "applied" && b.outcome === (j.outcome ?? null)) : BINS.find((b) => b.id === j.status));
+const inBin = (j, id) => binOf(j)?.id === id;
+const AFTER_APPLIED = ["applied", "interview", "offer", "rejected"];
 
 const channels = (j) => j.channels || [];
 /* Chỉ thấy ở trang tuyển dụng của công ty = tin chưa lên board = ít cạnh tranh hơn. */
@@ -136,14 +144,14 @@ export default function App() {
   const counts = useMemo(() => {
     const m = {};
     for (const b of BINS) m[b.id] = 0;
-    for (const j of jobs) m[j.status] = (m[j.status] || 0) + 1;
+    for (const j of jobs) { const b = binOf(j); if (b) m[b.id]++; }
     return m;
   }, [jobs]);
 
   /* ---------- actions ---------- */
-  const move = useCallback((id, status) => {
-    setJobs((js) => js.map((x) => (x.id === id ? { ...x, status, decidedBy: "human" } : x)));
-    api.decide(id, status)
+  const move = useCallback((id, status, outcome = null) => {
+    setJobs((js) => js.map((x) => (x.id === id ? { ...x, status, outcome: status === "applied" ? outcome : null, decidedBy: "human" } : x)));
+    api.decide(id, status, outcome)
       .then(({ job, canUndo }) => {
         setJobs((js) => js.map((x) => (x.id === id ? job : x)));
         setConf((c) => ({ ...c, canUndo }));
@@ -157,7 +165,7 @@ export default function App() {
         setConf((c) => ({ ...c, canUndo: r.canUndo }));
         if (r.nothing) { setToast("Không còn gì để hoàn tác"); return; }
         setJobs((js) => js.map((x) => (x.id === r.job.id ? r.job : x)));
-        const bin = BINS.find((b) => b.id === r.job.status);
+        const bin = binOf(r.job);
         const why = r.ruleOff ? " (luật cũ đã tắt)" : "";
         setToast(`Đã hoàn tác: ${r.job.title} · ${r.job.company} → ${bin ? bin.label : r.job.status}${why}`);
       })
@@ -287,8 +295,8 @@ export default function App() {
 
         <main className="main">
           {view === "new" && <Triage jobs={jobs.filter((j) => j.status === "new")} move={move} undo={undo} />}
-          {["queue", "maybe", "doubt", "applied", "killed", "archived"].includes(view) && (
-            <BinList bin={view} jobs={jobs.filter((j) => j.status === view)} move={move}
+          {view !== "new" && BINS.some((b) => b.id === view) && (
+            <BinList bin={view} jobs={jobs.filter((j) => inBin(j, view))} move={move}
               rules={conf.rules} sort={sort} setSort={setSort} />
           )}
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
@@ -447,6 +455,7 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
               {j.location && <span>{j.location}</span>}
               {j.adLanguage === "fi" && <span className="tagFi">tiếng Phần Lan</span>}
               <span>{ymd(j.foundAt)}</span>
+              {AFTER_APPLIED.includes(bin) && j.appliedAt && <span className="tagDays">nộp {ageDays(j.appliedAt)} ngày trước</span>}
               {j.killedBy && <span className="tagRule">luật: {ruleName(j.killedBy)}</span>}
               {j.url && <a href={j.url} target="_blank" rel="noreferrer">tin gốc</a>}
             </div>
@@ -454,6 +463,9 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
           <div className="rowActs">
             {bin !== "queue" && <button onClick={() => move(j.id, "queue")}>Đưa vào Hàng đọc</button>}
             {bin === "queue" && <button className="go" onClick={() => move(j.id, "applied")}>Đã nộp</button>}
+            {bin === "applied" && <button className="go" onClick={() => move(j.id, "applied", "interview")}>Phỏng vấn</button>}
+            {bin === "interview" && <button className="go" onClick={() => move(j.id, "applied", "offer")}>Offer</button>}
+            {["applied", "interview", "offer"].includes(bin) && <button onClick={() => move(j.id, "applied", "rejected")}>Từ chối</button>}
             {bin !== "killed" && <button className="off" onClick={() => move(j.id, "killed")}>Loại</button>}
             {bin === "killed" && <button onClick={() => move(j.id, "new")}>Trả về Hộp đến</button>}
           </div>
@@ -740,10 +752,12 @@ function Sources({ sources, toggle, jobs }) {
     const m = new Map();
     for (const j of jobs) {
       for (const c of channels(j)) {
-        const e = m.get(c) || { name: c, total: 0, kept: 0, applied: 0 };
+        const e = m.get(c) || { name: c, total: 0, kept: 0, applied: 0, interview: 0 };
         e.total++;
         if (["queue", "applied"].includes(j.status)) e.kept++;
         if (j.status === "applied") e.applied++;
+        // Tỉ lệ nộp → phỏng vấn (SPEC §7). Offer đã qua phỏng vấn nên tính vào.
+        if (j.status === "applied" && ["interview", "offer"].includes(j.outcome)) e.interview++;
         m.set(c, e);
       }
     }
@@ -771,7 +785,7 @@ function Sources({ sources, toggle, jobs }) {
           </p>
           <table className="yield">
             <thead>
-              <tr><th>Kênh</th><th>Tin</th><th>Giữ lại</th><th>Tỉ lệ</th><th>Đã nộp</th></tr>
+              <tr><th>Kênh</th><th>Tin</th><th>Giữ lại</th><th>Tỉ lệ</th><th>Đã nộp</th><th>Phỏng vấn</th></tr>
             </thead>
             <tbody>
               {yieldRows.map((r) => {
@@ -784,6 +798,7 @@ function Sources({ sources, toggle, jobs }) {
                     <td>{r.kept}</td>
                     <td>{r.total >= 20 ? `${rate}%` : <span className="dim">chưa đủ mẫu</span>}</td>
                     <td>{r.applied || ""}</td>
+                    <td>{r.interview || ""}</td>
                   </tr>
                 );
               })}
@@ -1058,6 +1073,7 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .tagRule{background:#DDE1E4;padding:1px 6px;border-radius:3px}
 .tagDl{background:#DDE6EE;color:var(--signal);padding:1px 6px;border-radius:3px}
 .tagDl.past{background:#EADADA;color:#7A2E2E}
+.tagDays{color:var(--signal);font-variant-numeric:tabular-nums}
 .pill{font-size:11px;padding:1px 7px;border-radius:10px}
 .pill.doubt{background:#FBF3E4;color:var(--amber)}
 .pill.maybe{background:#DDE6EE;color:var(--signal)}

@@ -77,6 +77,12 @@ function invariants(db) {
   none(`SELECT j.id, j.status FROM jobs j
         WHERE j.status IS NOT (SELECT e.to_status FROM events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1)`,
     "status phải khớp event cuối — mọi lần đổi status đều có event");
+  none("SELECT id, status, outcome FROM jobs WHERE outcome IS NOT NULL AND status != 'applied'",
+    "outcome chỉ sống ở applied");
+  none(`SELECT j.id, j.outcome FROM jobs j
+        WHERE j.outcome IS NOT (SELECT e.to_outcome FROM events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1)`,
+    "outcome phải khớp event cuối — đổi outcome cũng là một event");
+  none("SELECT id FROM jobs WHERE status = 'applied' AND applied_at IS NULL", "tin đã nộp phải có applied_at");
 }
 
 function scanSrc(re) {
@@ -355,6 +361,93 @@ check("tự lưu trữ không bao giờ đụng new, queue, applied, killed", ()
   eq(J.archiveStale(db).moved, 2, "số tin bị lưu trữ");
   for (const [status, id] of Object.entries(ids)) eq(job(db, id).status, want[status], `tin ở ${status}`);
   eq(job(db, ruleKilled.id).status, "killed", "tin luật loại");
+  invariants(db);
+});
+
+/* ---- bước 3b: giai đoạn sau khi nộp nằm ở jobs.outcome, status vẫn là applied ---- */
+check("outcome: Đã nộp → Phỏng vấn → Offer là ba event; applied_at ghi lúc bước vào applied; rời applied thì outcome về NULL", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  J.decide(db, a.id, "queue");
+  J.decide(db, a.id, "applied");
+  const t0 = job(db, a.id).applied_at;
+  ok(t0, "applied_at phải được ghi");
+  eq(job(db, a.id).outcome, null, "mới nộp: chưa có outcome");
+  J.decide(db, a.id, "applied", "interview");
+  eq([job(db, a.id).status, job(db, a.id).outcome], ["applied", "interview"], "sau Phỏng vấn");
+  eq(job(db, a.id).applied_at, t0, "đổi outcome không đụng applied_at");
+  J.decide(db, a.id, "applied", "offer");
+  const ev = db.prepare("SELECT from_status, to_status, from_outcome, to_outcome FROM events WHERE job_id = ? ORDER BY id").all(a.id).slice(-2);
+  eq(ev, [
+    { from_status: "applied", to_status: "applied", from_outcome: null, to_outcome: "interview" },
+    { from_status: "applied", to_status: "applied", from_outcome: "interview", to_outcome: "offer" },
+  ], "event ghi outcome trước/sau");
+  const listed = J.listJobs(db)[0];
+  eq([listed.outcome, listed.appliedAt], ["offer", t0], "danh sách trả outcome, appliedAt");
+  // "Trả về Hàng đọc" = status queue, outcome tự về NULL; nộp lại thì applied_at mới.
+  J.decide(db, a.id, "queue");
+  eq([job(db, a.id).status, job(db, a.id).outcome], ["queue", null], "rời applied");
+  backdate(db, a.id, 10, ["applied_at"]);
+  J.decide(db, a.id, "applied");
+  ok(Date.parse(job(db, a.id).applied_at) > Date.now() - DAY, "nộp lại: applied_at là lúc nộp lại, không phải ngày cũ");
+  invariants(db);
+});
+
+check("U hoàn tác cả outcome: Offer → về Phỏng vấn → về Đã nộp; ứng viên U so cả outcome", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", "interview");
+  J.decide(db, a.id, "applied", "offer");
+  eq(J.undo(db).job.outcome, "interview", "U lần 1");
+  eq(J.undo(db).job.outcome, null, "U lần 2");
+  eq(job(db, a.id).status, "applied", "vẫn Đã nộp");
+  eq(J.undo(db).job.status, "new", "U lần 3 về Hộp đến");
+  eq(job(db, a.id).outcome, null, "ngoài applied không có outcome");
+  invariants(db);
+});
+
+check("decide: outcome lạ, hoặc outcome kèm status khác applied → 400, không ghi gì", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  for (const [st, out] of [["applied", "ghosted"], ["queue", "interview"]]) {
+    let err = null;
+    try { J.decide(db, a.id, st, out); } catch (e) { err = e; }
+    eq(err?.status, 400, `${st}/${out} phải 400`);
+  }
+  eq(state(db, a.id), ["new", null, null], "không đổi");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n, 1, "không thêm event");
+});
+
+check("tự lưu trữ, chạy lại luật, tắt luật không đụng tin đã nộp có outcome", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Senior Backend Engineer"); // r_senior_soft → doubt
+  J.decide(db, a.id, "applied", "interview");
+  backdate(db, a.id, 100, ["status_at", "found_at", "applied_at"]);
+  eq(J.archiveStale(db).moved, 0, "tự lưu trữ");
+  J.rerunRules(db);
+  J.toggleRule(db, "r_senior_soft");
+  eq([job(db, a.id).status, job(db, a.id).outcome], ["applied", "interview"], "giữ nguyên");
+  invariants(db);
+});
+
+check("backfillAppliedAt: chỉ điền chỗ trống, lấy lần bước vào applied cuối, idempotent", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "queue");
+  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", "interview"); // không phải "bước vào" applied
+  const b = add(db, "Data Engineer");
+  J.decide(db, b.id, "applied");
+  const bAt = job(db, b.id).applied_at;
+  const want = db.prepare("SELECT MAX(at) at FROM events WHERE job_id = ? AND to_status = 'applied' AND from_status IS NOT 'applied'").get(a.id).at;
+  // Giả DB trước v12: cột trống.
+  db.prepare("UPDATE jobs SET applied_at = NULL WHERE id = ?").run(a.id);
+  eq(J.backfillAppliedAt(db), 1, "điền đúng một tin");
+  eq(job(db, a.id).applied_at, want, "lần bước vào applied cuối");
+  eq(job(db, b.id).applied_at, bAt, "tin đã có applied_at giữ nguyên");
+  eq(J.backfillAppliedAt(db), 0, "chạy lại không đổi gì");
   invariants(db);
 });
 

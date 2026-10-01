@@ -180,6 +180,17 @@ const MIGRATIONS = [
       db.exec("ALTER TABLE companies ADD COLUMN job_url_template TEXT");
     }
   },
+  /* v12 — bước 3b. jobs.outcome: giai đoạn SAU khi nộp (phỏng vấn / từ chối / offer), status vẫn là 'applied' —
+     CHECK của status không nới. jobs.applied_at: lần chuyển sang applied gần nhất, để hiện "N ngày".
+     events ghi cả outcome trước/sau, không thì đổi outcome không có lịch sử và U không hoàn tác được.
+     Backfill applied_at từ events nằm ở jobs.backfillAppliedAt (chỉ jobs.js được ghi vào jobs). */
+  (db) => {
+    const has = (table, col) => db.pragma(`table_info(${table})`).some((c) => c.name === col);
+    if (!has("jobs", "outcome")) db.exec("ALTER TABLE jobs ADD COLUMN outcome TEXT CHECK (outcome IN ('interview','rejected','offer'))");
+    if (!has("jobs", "applied_at")) db.exec("ALTER TABLE jobs ADD COLUMN applied_at TEXT");
+    if (!has("events", "from_outcome")) db.exec("ALTER TABLE events ADD COLUMN from_outcome TEXT");
+    if (!has("events", "to_outcome")) db.exec("ALTER TABLE events ADD COLUMN to_outcome TEXT");
+  },
 ];
 
 export function openDb(file) {

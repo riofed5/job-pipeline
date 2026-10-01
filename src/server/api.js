@@ -17,6 +17,7 @@ const PORT = Number(process.env.PORT) || 5173;
 const DATA = process.env.DATA_DIR || path.join(ROOT, "data");
 
 const db = openDb(path.join(DATA, "jobs.db"));
+jobs.backfillAppliedAt(db); // applied_at cho tin đã nộp trước v12; idempotent
 const backups = createBackups(db, path.join(DATA, "backups"));
 backups.runIfStale(); // sao lưu trước khi phục vụ
 loadEnv(); // IMAP + ANTHROPIC_API_KEY từ .env, trước khi tạo puller
@@ -46,7 +47,7 @@ app.post("/api/ingest", (req, res) => {
   res.json(jobs.ingest(db, items, manualSource(source)));
 });
 app.post("/api/jobs/:id/status", (req, res) =>
-  res.json({ job: jobs.decide(db, req.params.id, req.body?.status), canUndo: jobs.canUndo(db) }));
+  res.json({ job: jobs.decide(db, req.params.id, req.body?.status, req.body?.outcome ?? null), canUndo: jobs.canUndo(db) }));
 app.post("/api/undo", (req, res) => res.json({ ...jobs.undo(db), canUndo: jobs.canUndo(db) }));
 app.post("/api/archive-stale", (req, res) => res.json(jobs.archiveStale(db)));
 

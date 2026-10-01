@@ -14,6 +14,8 @@ import { normalizeItem } from "../ingest/normalize.js";
    4. decided_by = 'human' thì luật không đụng vào. */
 
 export const STATUSES = ["new", "queue", "maybe", "doubt", "applied", "killed", "archived"];
+/* Giai đoạn sau khi nộp. Chỉ có nghĩa khi status = 'applied'; rời applied thì về NULL. */
+export const OUTCOMES = ["interview", "rejected", "offer"];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const httpError = (status, message) => Object.assign(new Error(message), { status });
@@ -30,7 +32,7 @@ function stmt(db, sql) {
 /* ---------------------------- đọc ---------------------------- */
 
 // Không có description: không màn hình nào ở bàn phân loại được hiện nó.
-const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at, deadline";
+const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at, deadline, outcome, applied_at";
 
 const toJob = (r, channels) => ({
   id: r.id,
@@ -44,6 +46,8 @@ const toJob = (r, channels) => ({
   foundAt: r.found_at,
   status: r.status,
   statusAt: r.status_at,
+  outcome: r.outcome,
+  appliedAt: r.applied_at,
   decidedBy: r.decided_by,
   killedBy: r.killed_by,
   closedAt: r.closed_at,
@@ -81,15 +85,18 @@ const reviveTarget = (status) => (status === "archived" ? "maybe" : "new");
 
 /* ---------------------------- ghi ---------------------------- */
 
-/* Mọi lần đổi status của một tin đã có đi qua hàm này. status_at chỉ đổi khi status đổi,
-   hoặc khi resetClock (hoàn tác: tin vừa thật sự quay lại thùng đó). */
-function writeStatus(db, job, { status, decidedBy, killedBy, by, ruleId = null, undoOf = null, at, resetClock = false }) {
+/* Mọi lần đổi status hoặc outcome của một tin đã có đi qua hàm này. status_at chỉ đổi khi status đổi,
+   hoặc khi resetClock (hoàn tác: tin vừa thật sự quay lại thùng đó). outcome chỉ sống ở applied;
+   applied_at ghi lúc BƯỚC VÀO applied (đổi outcome bên trong applied không đụng nó). */
+function writeStatus(db, job, { status, outcome = null, decidedBy, killedBy, by, ruleId = null, undoOf = null, at, resetClock = false }) {
   const statusAt = resetClock || status !== job.status ? at : job.status_at;
-  stmt(db, "UPDATE jobs SET status = ?, status_at = ?, decided_by = ?, killed_by = ? WHERE id = ?")
-    .run(status, statusAt, decidedBy, killedBy, job.id);
-  stmt(db, `INSERT INTO events (job_id, at, from_status, to_status, by, rule_id, prev_decided_by, prev_killed_by, undo_of)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(job.id, at, job.status, status, by, ruleId, job.decided_by, job.killed_by, undoOf);
+  const out = status === "applied" ? outcome : null;
+  const appliedAt = status === "applied" && job.status !== "applied" ? at : job.applied_at;
+  stmt(db, "UPDATE jobs SET status = ?, status_at = ?, decided_by = ?, killed_by = ?, outcome = ?, applied_at = ? WHERE id = ?")
+    .run(status, statusAt, decidedBy, killedBy, out, appliedAt, job.id);
+  stmt(db, `INSERT INTO events (job_id, at, from_status, to_status, by, rule_id, prev_decided_by, prev_killed_by, undo_of, from_outcome, to_outcome)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(job.id, at, job.status, status, by, ruleId, job.decided_by, job.killed_by, undoOf, job.outcome, out);
 }
 
 export function ingest(db, items, { source, channel }) {
@@ -135,15 +142,26 @@ export function ingest(db, items, { source, channel }) {
   return counts;
 }
 
-/* Quyết định tay. killed_by giữ nguyên để còn hiện "luật: …"; decided_by = human là đủ để luật không đụng vào. */
-export function decide(db, id, status) {
+/* Quyết định tay. killed_by giữ nguyên để còn hiện "luật: …"; decided_by = human là đủ để luật không đụng vào.
+   outcome chỉ đi kèm status = 'applied'; "Trả về Hàng đọc" là decide(id, 'queue') và outcome tự về NULL. */
+export function decide(db, id, status, outcome = null) {
   if (!STATUSES.includes(status)) throw httpError(400, `status không hợp lệ: ${status}`);
+  if (outcome != null && !OUTCOMES.includes(outcome)) throw httpError(400, `outcome không hợp lệ: ${outcome}`);
+  if (outcome != null && status !== "applied") throw httpError(400, "outcome chỉ đi kèm status 'applied'");
   return db.transaction(() => {
     const job = row(db, id);
     if (!job) throw httpError(404, "không có tin này");
-    writeStatus(db, job, { status, decidedBy: "human", killedBy: job.killed_by, by: "human", at: now() });
+    writeStatus(db, job, { status, outcome, decidedBy: "human", killedBy: job.killed_by, by: "human", at: now() });
     return getJob(db, id);
   })();
+}
+
+/* applied_at cho tin đã nộp trước v12: lần cuối bước vào applied theo events. Idempotent, chỉ điền chỗ trống.
+   Gọi lúc mở DB (server, CLI) — db.js không được ghi vào jobs. */
+export function backfillAppliedAt(db) {
+  return stmt(db, `UPDATE jobs SET applied_at = (
+      SELECT MAX(e.at) FROM events e WHERE e.job_id = jobs.id AND e.to_status = 'applied' AND e.from_status IS NOT 'applied')
+    WHERE status = 'applied' AND applied_at IS NULL`).run().changes;
 }
 
 const UNDO_CANDIDATE = `
@@ -152,11 +170,12 @@ const UNDO_CANDIDATE = `
     AND e.undo_of IS NULL
     AND NOT EXISTS (SELECT 1 FROM events u WHERE u.undo_of = e.id)
     AND j.status = e.to_status
+    AND j.outcome IS e.to_outcome
   ORDER BY e.id DESC
   LIMIT 1`;
 // undo_of IS NULL: bản thân lần hoàn tác không phải ứng viên, nên U không lặp giữa hai trạng thái.
 // NOT EXISTS chứ không NOT IN: subquery chứa NULL làm NOT IN ra NULL cho mọi dòng, và U chết câm.
-// j.status = e.to_status: tin đã bị đổi sau quyết định đó (vd. tự lưu trữ) thì bỏ qua.
+// j.status = e.to_status (và outcome): tin đã bị đổi sau quyết định đó (vd. tự lưu trữ) thì bỏ qua.
 
 export const canUndo = (db) => Boolean(stmt(db, UNDO_CANDIDATE).get());
 
@@ -166,6 +185,7 @@ export function undo(db) {
     if (!e) return { nothing: true };
     const job = row(db, e.job_id);
     let status = e.from_status;
+    let outcome = e.from_outcome;
     let decidedBy = e.prev_decided_by;
     let killedBy = e.prev_killed_by;
     // Trả tin về quyết định của một luật đã tắt sẽ phá nguyên tắc 3 — xử lý như lúc tắt luật.
@@ -173,10 +193,11 @@ export function undo(db) {
     const ruleOff = decidedBy === "rule" && !stmt(db, "SELECT 1 FROM rules WHERE id = ? AND enabled = 1").get(killedBy);
     if (ruleOff) {
       status = reviveTarget(status);
+      outcome = null;
       decidedBy = null;
       killedBy = null;
     }
-    writeStatus(db, job, { status, decidedBy, killedBy, by: "human", undoOf: e.id, at: now(), resetClock: true });
+    writeStatus(db, job, { status, outcome, decidedBy, killedBy, by: "human", undoOf: e.id, at: now(), resetClock: true });
     return { job: getJob(db, job.id), ruleOff };
   })();
 }

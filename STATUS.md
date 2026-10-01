@@ -7,6 +7,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 1 | Schema, luật, UI port, nạp tay | Xong, dùng thật 2 ngày | 2026-09-14 |
 | 2 | `detect-ats.js` + `ats.js` + `pull.js` + tự kéo sau 12 giờ + Kéo ngay | **Xong** | 2026-09-16 |
 | 3 | `imap.js` + parser bằng Claude | **Xong**, đã kéo thật 11 mail LinkedIn | 2026-09-17 |
+| 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp (1/3) · `replies.js` (2/3) · tab Phản hồi + aliases (3/3) | **Đang làm**, xong 1/3 | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
 | 5 | `enrich.js` | Chưa | |
 | 6 | Cron + bảng theo dõi | Chưa | |
@@ -27,7 +28,16 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Ashby**: feed trả cả tin `isListed: false` (tin đã gỡ, kể cả "Unlisted TEST job"); parser bỏ chúng nên `closed_at` bắt được.
 - **Luật mẫu thêm sau bước 1** (seed cho DB mới, migration cho DB đang dùng): `r_abroad` — location chứa `us, gb, uk, pl, de, se, dk, ca, india, norway` → loại (không dùng `in`, `no` vì trùng từ tiếng Anh); `r_openapp` — title chứa `open application, avoin hakemus, general application, spontaneous application` → Ngờ vực; `r_otherlang` — title chứa `german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare` → Ngờ vực (dấu * vì tiếng Đức/Thụy Điển ghép từ). Luật loại thắng luật Ngờ vực khi cả hai khớp.
 - **`jobs.deadline`**: cột có, để trống tới bước 5. Mỗi thùng có nút xếp: mới thêm (mặc định) / cũ nhất / deadline gần nhất, trống xếp cuối. Hộp đến và Rà soát không có nút xếp.
-- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 53 kịch bản. Schema v11.
+- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 58 kịch bản. Schema v12.
+
+## Bước 3b có gì (1/3 — sau khi nộp)
+
+- **`jobs.outcome`** (schema v12): `interview` / `rejected` / `offer` / NULL, chỉ sống khi `status = 'applied'`. CHECK của `status` không nới, không DROP TABLE, không tắt FK. Rời `applied` (Trả về Hàng đọc, Loại) → outcome tự về NULL.
+- **Bốn thùng trên rail** từ một status: Đã nộp (outcome NULL), Phỏng vấn, Offer, Từ chối. Offer hiện luôn kể cả 0. `binOf()` trong App.jsx là chỗ duy nhất xếp tin vào thùng.
+- **`jobs.applied_at`**: ghi lúc bước vào `applied`; đổi outcome không đụng. Bốn thùng sau khi nộp hiện "nộp N ngày trước". Tin nộp trước v12 được `jobs.backfillAppliedAt` điền từ events lúc server/CLI mở DB (db.js không được ghi vào jobs); 17/17 tin thật có ngày.
+- **`events.from_outcome` / `to_outcome`**: đổi outcome cũng là một event, U hoàn tác được (ứng viên U so cả outcome). `POST /api/jobs/:id/status` nhận thêm `outcome`; outcome kèm status khác `applied` → 400.
+- Bảng năng suất ở tab Nguồn thêm cột **Phỏng vấn** (= interview + offer). `archiveStale`, `rerunRules`, `toggleRule` không đụng tin đã nộp — có kịch bản kiểm.
+- Còn lại của 3b: `replies.js` (IMAP SEARCH theo tên công ty, một lần gọi Claude mỗi công ty, bảng `replies`, chạy trong pull chung), tab Phản hồi với Xác nhận / Sai là đường duy nhất replies đụng jobs, `companies.aliases`.
 
 ## Còn mở
 
