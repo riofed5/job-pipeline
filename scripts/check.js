@@ -1334,6 +1334,70 @@ await checkAsync("bước phản hồi: tên khác vào SEARCH, mail lưu, đề
   invariants(db);
 });
 
+check("confirmReply: rejection → Từ chối, interview/assessment → Phỏng vấn, ack chỉ ghi nhận; event của người; U hoàn tác được; không đụng tin đã rời applied hay đã offer", () => {
+  const db = openDb(":memory:");
+  const mk = (title, outcome = null) => { const j = add(db, title, "Reaktor"); J.decide(db, j.id, "applied", outcome); return j.id; };
+  const a = mk("A"), b = mk("B", "interview"), c = mk("C"), d = mk("D"), e = mk("E", "offer"), f = mk("F", "interview");
+  R.storeMail(db, "reaktor", { messageId: "<m1>", from: "Reaktor", subject: "Interview", date: "2026-09-25T10:00:00Z", text: "t" });
+  const prop = (jobId, status, evidence = "<m1>") => Number(R.addProposal(db, "reaktor", { jobId, status, evidence, note: "" }));
+  const pa = prop(a, "interview"), pb = prop(b, "rejection"), pc = prop(c, "ack"), pd = prop(d, "assessment"), pe = prop(e, "rejection"), pf = prop(f, "rejection");
+  const events = () => one(db, "SELECT COUNT(*) n FROM events").n;
+  let n = events();
+  let r = J.confirmReply(db, pa);
+  eq([r.changed, r.job.status, r.job.outcome, r.reply.resolution], [true, "applied", "interview", "confirmed"], "a: interview");
+  eq(db.prepare("SELECT by, from_outcome, to_outcome FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(a), { by: "human", from_outcome: null, to_outcome: "interview" }, "event của người");
+  r = J.confirmReply(db, pb);
+  eq([r.changed, r.job.outcome], [true, "rejected"], "b: phỏng vấn rồi bị từ chối");
+  r = J.confirmReply(db, pc);
+  eq([r.changed, r.job.outcome, r.reply.resolution], [false, null, "confirmed"], "c: ack chỉ ghi nhận");
+  r = J.confirmReply(db, pd);
+  eq([r.changed, r.job.outcome], [true, "interview"], "d: assessment → Phỏng vấn");
+  r = J.confirmReply(db, pe);
+  eq([r.changed, r.job.outcome], [false, "offer"], "e: đã offer thì không hạ");
+  J.decide(db, f, "queue"); // người đã kéo tin về Hàng đọc
+  r = J.confirmReply(db, pf);
+  eq([r.changed, r.job.status, r.job.outcome], [false, "queue", null], "f: rời applied → quyết định tay thắng");
+  eq(events() - n, 3 + 1, "3 lần đổi outcome + 1 decide tay");
+  eq(R.listPending(db), [], "không còn đề xuất chờ");
+  let err = null;
+  try { J.confirmReply(db, pa); } catch (x) { err = x; }
+  eq(err?.status, 409, "đã xử lý → 409");
+  try { J.confirmReply(db, 9999); } catch (x) { err = x; }
+  eq(err?.status, 404, "không có → 404");
+  eq([J.undo(db).job.status, job(db, f).outcome], ["applied", "interview"], "U cuối: f về trước lệnh Hàng đọc, kể cả outcome");
+  eq(J.undo(db).job.outcome, null, "U: d về Đã nộp — xác nhận là một quyết định hoàn tác được");
+  invariants(db);
+});
+
+check("rejectReply: chỉ ghi Sai, không đụng jobs/events; đã xử lý → 409", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "A", "Reaktor");
+  J.decide(db, a.id, "applied");
+  const id = Number(R.addProposal(db, "reaktor", { jobId: a.id, status: "rejection", evidence: null, note: "" }));
+  const before = JSON.stringify([db.prepare("SELECT * FROM jobs").all(), db.prepare("SELECT * FROM events").all()]);
+  eq(J.rejectReply(db, id).reply.resolution, "wrong", "ghi Sai");
+  eq(JSON.stringify([db.prepare("SELECT * FROM jobs").all(), db.prepare("SELECT * FROM events").all()]), before, "jobs/events y nguyên");
+  let err = null;
+  try { J.rejectReply(db, id); } catch (x) { err = x; }
+  eq(err?.status, 409, "đã xử lý → 409");
+  eq(R.listPending(db), [], "không còn chờ");
+});
+
+check("companies.aliases: patch được, trả về trong danh sách, trống thì rỗng", () => {
+  const db = openDb(":memory:");
+  const c = C.addCompany(db, { name: "Reaktor" }).company;
+  eq(c.aliases, "", "mặc định rỗng");
+  eq(C.patchCompany(db, c.id, { aliases: " Reaktor Group, reaktor.com " }).aliases, "Reaktor Group, reaktor.com", "cắt khoảng trắng");
+  eq(R.aliasesFor(db, "reaktor"), ["Reaktor Group", "reaktor.com"], "dùng được trong SEARCH");
+  eq(C.listCompanies(db)[0].aliases, "Reaktor Group, reaktor.com", "listCompanies trả aliases");
+});
+
+check("chỉ jobs.js được ghi 'confirmed' vào replies — đường duy nhất đề xuất đụng tới tin", () => {
+  const hits = scanSrc(/resolveReply\([^)]*"confirmed"/);
+  eq(hits.filter((h) => !h.startsWith("src/core/jobs.js")), [], "chỗ khác xác nhận đề xuất");
+  ok(hits.length === 1, "regex phải bắt được đúng chỗ trong jobs.js");
+});
+
 check("replies.js (core và ingest) không gọi decide/writeStatus, không có SQL ghi vào jobs", () => {
   for (const f of ["src/core/replies.js", "src/ingest/replies.js"]) {
     const src = fs.readFileSync(path.join(ROOT, f), "utf8");

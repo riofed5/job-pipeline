@@ -4,6 +4,7 @@ import { fingerprint } from "./dedupe.js";
 import { compileRules, evaluate } from "./rules.js";
 import { listRules } from "./config.js";
 import { normalizeItem } from "../ingest/normalize.js";
+import * as replies from "./replies.js";
 
 /* Nơi DUY NHẤT ghi vào jobs, sightings, events. Mọi lần đổi status ghi một event
    trong cùng transaction. Bốn nguyên tắc trong CLAUDE.md được canh ở đây và
@@ -295,6 +296,38 @@ export function markClosed(db, source, liveFingerprints) {
     }
     return { closed, reopened };
   })();
+}
+
+/* Người Xác nhận một đề xuất phản hồi (bước 3b). ĐƯỜNG DUY NHẤT bảng replies đụng tới jobs.
+   rejection → Từ chối; interview, assessment → Phỏng vấn; ack, other, no_reply → chỉ ghi nhận, tin không đổi.
+   Chỉ đổi tin còn ở applied và chưa có offer: người đã chuyển tin đi nơi khác thì quyết định đó thắng.
+   Quyết định ghi là của người — Claude đề xuất, người bấm. */
+const REPLY_OUTCOME = { rejection: "rejected", interview: "interview", assessment: "interview" };
+
+export function confirmReply(db, replyId) {
+  return db.transaction(() => {
+    const r = replies.getReply(db, replyId);
+    if (!r) throw httpError(404, "không có đề xuất này");
+    if (r.resolution) throw httpError(409, "đề xuất này đã xử lý rồi");
+    const job = row(db, r.jobId);
+    const outcome = REPLY_OUTCOME[r.status] ?? null;
+    let changed = false;
+    if (outcome && job.status === "applied" && job.outcome !== "offer" && job.outcome !== outcome) {
+      writeStatus(db, job, { status: "applied", outcome, decidedBy: "human", killedBy: job.killed_by, by: "human", at: now() });
+      changed = true;
+    }
+    replies.resolveReply(db, replyId, "confirmed");
+    return { reply: replies.getReply(db, replyId), job: getJob(db, job.id), changed };
+  })();
+}
+
+/* Người bảo đề xuất Sai: chỉ đánh dấu. Không đụng jobs; lần kéo sau đề xuất y hệt không quay lại. */
+export function rejectReply(db, replyId) {
+  const r = replies.getReply(db, replyId);
+  if (!r) throw httpError(404, "không có đề xuất này");
+  if (r.resolution) throw httpError(409, "đề xuất này đã xử lý rồi");
+  replies.resolveReply(db, replyId, "wrong");
+  return { reply: replies.getReply(db, replyId) };
 }
 
 /* Tự lưu trữ theo thời gian nằm trong thùng (status_at), không theo found_at. */

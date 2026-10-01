@@ -30,6 +30,10 @@ const binOf = (j) => (j.status === "applied" ? BINS.find((b) => b.status === "ap
 const inBin = (j, id) => binOf(j)?.id === id;
 const AFTER_APPLIED = ["applied", "interview", "offer", "rejected"];
 
+/* Đề xuất phản hồi (bước 3b): nhãn và việc Xác nhận sẽ làm. Chỉ ba loại đổi thùng; còn lại chỉ ghi nhận. */
+const REPLY_LABEL = { no_reply: "chưa phản hồi", ack: "đã nhận hồ sơ", rejection: "từ chối", interview: "mời phỏng vấn", assessment: "bài kiểm tra", other: "khác" };
+const REPLY_EFFECT = { rejection: "Xác nhận → thùng Từ chối", interview: "Xác nhận → thùng Phỏng vấn", assessment: "Xác nhận → thùng Phỏng vấn" };
+
 const channels = (j) => j.channels || [];
 /* Chỉ thấy ở trang tuyển dụng của công ty = tin chưa lên board = ít cạnh tranh hơn. */
 const isEarly = (j) => { const c = channels(j); return c.length === 1 && c[0] === "Trang công ty"; };
@@ -53,6 +57,7 @@ const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("sv-SE", { dateStyl
 /* ============================= APP ============================= */
 export default function App() {
   const [jobs, setJobs] = useState([]);
+  const [replies, setReplies] = useState([]);
   const [conf, setConf] = useState(null);
   const [view, setView] = useState("new");
   const [ready, setReady] = useState(false);
@@ -62,10 +67,11 @@ export default function App() {
   const [sort, setSort] = useState("newest"); // dùng chung cho mọi thùng, đổi thùng không mất
 
   const reload = useCallback(async () => {
-    const [j, rules, companies, sources, settings] = await Promise.all([
-      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(),
+    const [j, rules, companies, sources, settings, pending] = await Promise.all([
+      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(), api.replies(),
     ]);
     setJobs(j);
+    setReplies(pending);
     setConf({ rules, companies, sources, ...settings });
     return settings;
   }, []);
@@ -170,6 +176,23 @@ export default function App() {
         setToast(`Đã hoàn tác: ${r.job.title} · ${r.job.company} → ${bin ? bin.label : r.job.status}${why}`);
       })
       .catch(fail);
+  }, [fail]);
+
+  /* Phản hồi: Xác nhận là đường duy nhất đề xuất của Claude đụng tới tin — và người bấm. Sai chỉ đánh dấu. */
+  const confirmReply = useCallback((id) => {
+    setReplies((rs) => rs.filter((r) => r.id !== id));
+    api.confirmReply(id)
+      .then(({ job, changed, canUndo }) => {
+        setJobs((js) => js.map((x) => (x.id === job.id ? job : x)));
+        setConf((c) => ({ ...c, canUndo }));
+        setToast(changed ? `${job.title} · ${job.company} → ${binOf(job)?.label}` : "Đã ghi nhận. Tin không đổi thùng.");
+      })
+      .catch(fail);
+  }, [fail]);
+
+  const wrongReply = useCallback((id) => {
+    setReplies((rs) => rs.filter((r) => r.id !== id));
+    api.wrongReply(id).then(() => setToast("Đã đánh dấu Sai. Đề xuất này không quay lại.")).catch(fail);
   }, [fail]);
 
   const ingest = useCallback(async (source, items) => {
@@ -288,8 +311,11 @@ export default function App() {
           ))}
           <div className="railNote">Không có gì bị xóa. Mọi tin đều nằm trong một thùng.</div>
           <div className="railHead sp">Công cụ</div>
-          {[["find", "Tìm job"], ["sweep", "Rà soát"], ["companies", "Công ty"], ["sources", "Nguồn"], ["rules", "Luật"], ["data", "Dữ liệu"]].map(([id, lbl]) => (
-            <button key={id} className={"tool" + (view === id ? " on" : "")} onClick={() => setView(id)}>{lbl}</button>
+          {[["find", "Tìm job"], ["replies", "Phản hồi"], ["sweep", "Rà soát"], ["companies", "Công ty"], ["sources", "Nguồn"], ["rules", "Luật"], ["data", "Dữ liệu"]].map(([id, lbl]) => (
+            <button key={id} className={"tool" + (view === id ? " on" : "")} onClick={() => setView(id)}>
+              <span>{lbl}</span>
+              {id === "replies" && replies.length > 0 && <span className="binN">{replies.length}</span>}
+            </button>
           ))}
         </nav>
 
@@ -301,6 +327,7 @@ export default function App() {
           )}
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
           {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
+          {view === "replies" && <Replies replies={replies} confirm={confirmReply} wrong={wrongReply} />}
           {view === "companies" && <Companies list={conf.companies} jobs={jobs} add={addCompany}
             seed={seedCompanies} patch={patchCompany} detect={detectAts} resolve={resolveCandidate} setToast={setToast} />}
           {view === "sources" && <Sources sources={conf.sources} toggle={toggleSource} jobs={jobs} />}
@@ -476,6 +503,66 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
   );
 }
 
+/* ========================= REPLIES ========================= */
+/* Đề xuất của Claude về phản hồi của công ty. Không hiện mô tả công việc — đây cũng là bàn phân loại.
+   Claude không đổi trạng thái tin; chỉ Xác nhận của người mới đổi. */
+function Replies({ replies, confirm, wrong }) {
+  const [open, setOpen] = useState(null);
+
+  return (
+    <div className="list">
+      <div className="listHead">
+        <h2>Phản hồi</h2>
+        <span className="dim">{replies.length} đề xuất chờ</span>
+      </div>
+      <p className="advice">
+        Mỗi lần kéo, hộp thư được tìm theo tên công ty có hồ sơ ở Đã nộp hoặc Phỏng vấn, rồi Claude đọc và
+        <b> đề xuất</b>. Nó không đổi gì. Mày đọc mail bằng chứng rồi bấm: <b>Xác nhận</b> mới chuyển thùng,
+        <b> Sai</b> thì đề xuất này không quay lại.
+      </p>
+      {!replies.length && <Empty title="Không có đề xuất nào chờ" body="Có mail trả lời từ công ty thì đề xuất hiện ở đây sau lần kéo kế tiếp." />}
+      {replies.map((r) => {
+        const j = r.job;
+        const m = r.evidence;
+        return (
+          <div key={r.id} className="row">
+            <div className="rowMain">
+              <div className="rowTop">
+                <b>{j.title}</b>
+                <span className="dim">{j.company}</span>
+                <span className={"pill reply " + r.status}>{REPLY_LABEL[r.status] || r.status}</span>
+              </div>
+              <div className="rowMeta">
+                {j.appliedAt && <span>nộp {ageDays(j.appliedAt)} ngày trước</span>}
+                <span>đang ở {binOf(j)?.label || j.status}</span>
+                <span className={REPLY_EFFECT[r.status] ? "tagDays" : "dim"}>{REPLY_EFFECT[r.status] || "Xác nhận chỉ ghi nhận, tin không đổi thùng"}</span>
+              </div>
+              {r.note && <div className="replyNote">{r.note}</div>}
+              {m ? (
+                <div className="mail">
+                  <div className="mailHead">
+                    <b>{m.subject || "(không tiêu đề)"}</b>
+                    <span className="dim">{m.from}</span>
+                    {m.date && <span className="dim">{fmtTime(m.date)}</span>}
+                    <button className="linkBtn" onClick={() => setOpen(open === r.id ? null : r.id)}>{open === r.id ? "thu gọn" : "đọc mail"}</button>
+                  </div>
+                  {open === r.id && <pre className="mailText">{m.text}</pre>}
+                </div>
+              ) : (
+                <div className="dim small">Không có mail bằng chứng — Claude không chỉ ra được mail nào.</div>
+              )}
+            </div>
+            <div className="rowActs">
+              <button className="go" onClick={() => confirm(r.id)}>Xác nhận</button>
+              <button onClick={() => wrong(r.id)}>Sai</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ========================= SWEEP ========================= */
 function Sweep({ jobs, move, conf, markSweep }) {
   const pool = jobs.filter((j) => j.status === "maybe" || j.status === "doubt");
@@ -595,15 +682,17 @@ function Find({ ingest, pull, startPull, conf }) {
                 return (
                   <tr key={i} className={r.error ? "bad" : blind ? "blind" : ""}>
                     <td>{r.name}{r.platform ? <span className="dim"> · {r.platform}</span> : ""}
+                      {r.kind === "replies" && <div className="dim small">{r.companies} công ty · {r.mails} mail mới · {r.calls} lần gọi Claude · {r.proposals} đề xuất</div>}
+                      {r.note && <div className="dim small">{r.note}</div>}
                       {r.error && <div className="errSm">{r.error}</div>}
                       {blind && <div className="errSm">0 giữ trên {r.total} tin — xem chuỗi địa điểm trong feed: có thể định dạng không khớp danh sách lọc, hoặc họ không có việc ở Phần Lan lúc này.</div>}
                     </td>
                     <td>{r.kind === "ats" ? r.total : ""}{r.notModified ? <span className="dim"> ={""}</span> : ""}</td>
                     <td>{r.kind === "ats" ? r.kept : ""}</td>
                     <td>{r.kind === "ats" ? r.dropped : ""}</td>
-                    <td>{r.added}</td>
-                    <td>{r.auto}</td>
-                    <td>{r.dup}</td>
+                    <td>{r.kind === "replies" ? "" : r.added}</td>
+                    <td>{r.kind === "replies" ? "" : r.auto}</td>
+                    <td>{r.kind === "replies" ? "" : r.dup}</td>
                     <td>{r.closed || ""}</td>
                   </tr>
                 );
@@ -696,6 +785,11 @@ function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) 
               <input className="inline" placeholder="link trang tuyển dụng" value={c.url}
                 onChange={(e) => patch(c.id, { url: e.target.value })} />
               {c.url && <a href={c.url} target="_blank" rel="noreferrer">mở</a>}
+              {jobCount(c.name) > 0 && (
+                <input className="inline" placeholder="tên khác, cách nhau bằng dấu phẩy — dùng khi tìm mail phản hồi" value={c.aliases || ""}
+                  title="Tên công ty xuất hiện trong mail có thể khác tên trên tin (Reaktor Group, reaktor.com). Mỗi tên ở đây được thêm vào IMAP SEARCH."
+                  onChange={(e) => patch(c.id, { aliases: e.target.value })} />
+              )}
             </div>
             <div className="rowMeta">
               {!c.ats && <span className="dim">chưa dò ATS</span>}
@@ -1074,6 +1168,14 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .tagDl{background:#DDE6EE;color:var(--signal);padding:1px 6px;border-radius:3px}
 .tagDl.past{background:#EADADA;color:#7A2E2E}
 .tagDays{color:var(--signal);font-variant-numeric:tabular-nums}
+.pill.reply{background:#DDE1E4;color:#3E4952}
+.pill.reply.interview,.pill.reply.assessment{background:#DDE6EE;color:var(--signal)}
+.pill.reply.rejection{background:#F3DEDA;color:#9A2C1E}
+.replyNote{font-size:13px;color:#3E4952;margin-top:6px;font-style:italic}
+.mail{margin-top:8px;border:1px solid var(--line);border-radius:5px;padding:8px 10px;background:#F6F7F8}
+.mailHead{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;font-size:12.5px}
+.mailText{white-space:pre-wrap;font-family:inherit;font-size:12.5px;color:#3E4952;margin:8px 0 0;max-height:260px;overflow:auto}
+.linkBtn{background:none;border:0;padding:0;color:var(--signal);cursor:pointer;font-size:12.5px;text-decoration:underline}
 .pill{font-size:11px;padding:1px 7px;border-radius:10px}
 .pill.doubt{background:#FBF3E4;color:var(--amber)}
 .pill.maybe{background:#DDE6EE;color:var(--signal)}

@@ -35,6 +35,10 @@ export const api = {
   undo: () => send("POST", "/api/undo"),
   archiveStale: () => send("POST", "/api/archive-stale"),
 
+  replies: () => send("GET", "/api/replies"),
+  confirmReply: (id) => send("POST", `/api/replies/${encodeURIComponent(id)}/confirm`),
+  wrongReply: (id) => send("POST", `/api/replies/${encodeURIComponent(id)}/wrong`),
+
   createRule: () => send("POST", "/api/rules"),
   patchRule: (id, patch) => send("PATCH", `/api/rules/${encodeURIComponent(id)}`, patch),
   toggleRule: (id) => send("POST", `/api/rules/${encodeURIComponent(id)}/toggle`),

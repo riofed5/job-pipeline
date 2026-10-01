@@ -6,6 +6,7 @@ import { createServer as createVite } from "vite";
 import { openDb, createBackups, exportAll } from "../core/db.js";
 import * as jobs from "../core/jobs.js";
 import * as config from "../core/config.js";
+import { listPending } from "../core/replies.js";
 import { manualSource } from "../ingest/normalize.js";
 import { createPuller, loadEnv } from "../ingest/pull.js";
 import { detectAts } from "../ingest/detect-ats.js";
@@ -50,6 +51,11 @@ app.post("/api/jobs/:id/status", (req, res) =>
   res.json({ job: jobs.decide(db, req.params.id, req.body?.status, req.body?.outcome ?? null), canUndo: jobs.canUndo(db) }));
 app.post("/api/undo", (req, res) => res.json({ ...jobs.undo(db), canUndo: jobs.canUndo(db) }));
 app.post("/api/archive-stale", (req, res) => res.json(jobs.archiveStale(db)));
+
+/* ---------- phản hồi (bước 3b): đề xuất của Claude, người Xác nhận / Sai. Xác nhận là đường duy nhất replies đụng jobs ---------- */
+app.get("/api/replies", (req, res) => res.json(listPending(db)));
+app.post("/api/replies/:id/confirm", (req, res) => res.json({ ...jobs.confirmReply(db, Number(req.params.id)), canUndo: jobs.canUndo(db) }));
+app.post("/api/replies/:id/wrong", (req, res) => res.json(jobs.rejectReply(db, Number(req.params.id))));
 
 /* ---------- luật ---------- */
 app.post("/api/rules", (req, res) => res.json(config.createRule(db)));

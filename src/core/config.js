@@ -107,6 +107,7 @@ const toCompany = (c) => ({
   atsToken: c.ats_token,
   atsEtag: c.ats_etag,
   jobUrlTemplate: c.job_url_template ?? "",
+  aliases: c.aliases ?? "",
   lastPull: c.last_pull,
   firstPull: c.first_pull,
   lastNewAt: c.last_new_at,
@@ -131,7 +132,7 @@ export function addCompany(db, { name, tier = "" } = {}) {
 }
 
 export function patchCompany(db, id, patch = {}) {
-  const cols = { tier: "tier", url: "careers_url", note: "note", jobUrlTemplate: "job_url_template" };
+  const cols = { tier: "tier", url: "careers_url", note: "note", jobUrlTemplate: "job_url_template", aliases: "aliases" };
   const bad = Object.keys(patch).filter((k) => !(k in cols));
   if (bad.length) throw httpError(400, `không sửa được: ${bad.join(", ")}`);
   if ("tier" in patch && !TIERS.includes(patch.tier)) throw httpError(400, "hạng không hợp lệ");
