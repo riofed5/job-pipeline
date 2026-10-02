@@ -50,8 +50,8 @@ Con số ở dòng tiêu đề trên là cổng chặn duy nhất. Nó chỉ đ�
 - Không thêm dependency nếu chưa hỏi.
 - Không refactor phần đang chạy tốt trừ khi tao yêu cầu.
 - Khi tao chỉ ra lỗi, sửa đúng chỗ đó. Đừng nhân tiện dọn dẹp chỗ khác.
-- Commit nào đụng src/ui/ hoặc thêm dependency: mở app thật trong trình duyệt
-  trước khi commit, console không có lỗi.
+- Commit nào đụng src/ui/ hoặc thêm dependency: mở app thật trong trình duyệt trước khi commit, console không có lỗi.
+- Mọi kiểm thử, kể cả kiểm UI bằng trình duyệt, chạy trên server riêng với DATA_DIR trỏ tới bản sao. Không bao giờ bấm vào server đang phục vụ data/jobs.db.
 
 ## Cấm
 
