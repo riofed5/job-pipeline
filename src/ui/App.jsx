@@ -4,7 +4,7 @@ import { norm } from "../core/dedupe.js";
 import { SEED_COMPANIES } from "../core/seed.js";
 import { summarize } from "../ingest/summary.js";
 import { SORTS, sortJobs } from "./sort.js";
-import { FIT_TABS, REASON_LABEL, fitTab, fitCounts, summarizeFit } from "./fit.js";
+import { FIT_TABS, REASON_LABEL, KILL_REASONS, KILL_LABEL, SOURCE_LABEL, fitTab, fitCounts, summarizeFit } from "./fit.js";
 
 /* ============================================================
    Bàn phân loại — job pipeline (bản local)
@@ -69,12 +69,12 @@ export default function App() {
   const [sort, setSort] = useState("newest"); // dùng chung cho mọi thùng, đổi thùng không mất
 
   const reload = useCallback(async () => {
-    const [j, rules, companies, sources, settings, pending] = await Promise.all([
-      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(), api.replies(),
+    const [j, rules, companies, sources, settings, pending, killStats] = await Promise.all([
+      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(), api.replies(), api.killStats(),
     ]);
     setJobs(j);
     setReplies(pending);
-    setConf({ rules, companies, sources, ...settings });
+    setConf({ rules, companies, sources, killStats, ...settings });
     return settings;
   }, []);
 
@@ -186,13 +186,16 @@ export default function App() {
   }, [jobs]);
 
   /* ---------- actions ---------- */
-  const move = useCallback((id, status, outcome = null) => {
+  /* extra = { reason, reasonText, reasonSource } khi loại qua picker (human) hoặc Loại tất cả off-profile (model).
+     Phím 4 ở Hộp đến và nút Loại ở thùng khác không gửi gì — không hỏi lý do. */
+  const move = useCallback((id, status, outcome = null, extra = {}) => {
     setJobs((js) => js.map((x) => (x.id === id ? { ...x, status, outcome: status === "applied" ? outcome : null, decidedBy: "human" } : x)));
-    api.decide(id, status, outcome)
+    api.decide(id, status, outcome, extra)
       .then(({ job, canUndo, enrich: e }) => {
         setJobs((js) => js.map((x) => (x.id === id ? job : x)));
         setConf((c) => ({ ...c, canUndo }));
         if (e) setEnrich(e); // tin vào Hàng đọc → server đã bắt đầu phân tích ở nền
+        if (status === "killed") api.killStats().then((killStats) => setConf((c) => ({ ...c, killStats }))).catch(() => {});
       })
       .catch(fail);
   }, [fail]);
@@ -365,7 +368,7 @@ export default function App() {
             seed={seedCompanies} patch={patchCompany} detect={detectAts} resolve={resolveCandidate} setToast={setToast} />}
           {view === "sources" && <Sources sources={conf.sources} toggle={toggleSource} jobs={jobs} />}
           {view === "rules" && <Rules rules={conf.rules} jobs={jobs} toggleRule={toggleRule} editRule={editRule}
-            addRule={addRule} rerun={rerun} />}
+            addRule={addRule} rerun={rerun} killStats={conf.killStats || []} />}
           {view === "data" && <Data jobs={jobs} conf={conf} setToast={setToast} />}
         </main>
       </div>
@@ -484,7 +487,8 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort, enrich, star
     const off = all.filter((j) => fitTab(j, fitOpts) === "off");
     if (!off.length) return;
     if (!window.confirm(`Loại ${off.length} tin off-profile? Đây là ${off.length} quyết định của mày, mỗi tin hoàn tác được bằng U.`)) return;
-    for (const j of off) move(j.id, "killed");
+    // Lý do chép từ model → reason_source = model; bảng ở tab Luật tách riêng, không so với "model nói on-profile".
+    for (const j of off) move(j.id, "killed", null, { reason: KILL_REASONS.includes(j.fit?.reason) ? j.fit.reason : "other", reasonText: null, reasonSource: "model" });
   };
 
   return (
@@ -567,12 +571,41 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort, enrich, star
             {bin === "applied" && <button className="go" onClick={() => move(j.id, "applied", "interview")}>Phỏng vấn</button>}
             {bin === "interview" && <button className="go" onClick={() => move(j.id, "applied", "offer")}>Offer</button>}
             {["applied", "interview", "offer"].includes(bin) && <button onClick={() => move(j.id, "applied", "rejected")}>Từ chối</button>}
-            {bin !== "killed" && <button className="off" onClick={() => move(j.id, "killed")}>Loại</button>}
+            {["queue", "interview", "rejected"].includes(bin)
+              ? <KillPicker onPick={(reason, reasonText) => move(j.id, "killed", null, { reason, reasonText, reasonSource: "human" })} />
+              : bin !== "killed" && <button className="off" onClick={() => move(j.id, "killed")}>Loại</button>}
             {bin === "killed" && <button onClick={() => move(j.id, "new")}>Trả về Hộp đến</button>}
           </div>
         </div>
       ))}
       {capped && jobs.length > 10 && <div className="cutNote">Dưới vạch này để buổi sau.</div>}
+    </div>
+  );
+}
+
+/* Nút Loại có hỏi lý do (Hàng đọc, Rà soát, Phỏng vấn, Từ chối). Mã cùng với fit.reason của model để tab Luật
+   so người với model. "khác" mở ô chữ. Hộp đến (phím 4) và các thùng khác KHÔNG đi qua đây. */
+function KillPicker({ onPick, label = "Loại" }) {
+  const [open, setOpen] = useState(false);
+  const [other, setOther] = useState(false);
+  const [text, setText] = useState("");
+  if (!open) return <button className="off" onClick={() => setOpen(true)}>{label}</button>;
+  const pick = (r, t = null) => { onPick(r, t); setOpen(false); setOther(false); setText(""); };
+  return (
+    <div className="killPick">
+      <span className="dim small">vì sao?</span>
+      {KILL_REASONS.map((r) => (
+        <button key={r} className={"chipBtn" + (other && r === "other" ? " on" : "")}
+          onClick={() => (r === "other" ? setOther(true) : pick(r))}>{KILL_LABEL[r]}</button>
+      ))}
+      {other && (
+        <>
+          <input autoFocus value={text} placeholder="lý do" onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") pick("other", text); if (e.key === "Escape") setOpen(false); }} />
+          <button className="off" onClick={() => pick("other", text)}>Loại</button>
+        </>
+      )}
+      <button className="chipBtn" onClick={() => { setOpen(false); setOther(false); }}>hủy</button>
     </div>
   );
 }
@@ -704,7 +737,7 @@ function Sweep({ jobs, move, conf, markSweep }) {
           </div>
           <div className="rowActs">
             <button className="go" onClick={() => move(j.id, "queue")}>Đưa vào Hàng đọc</button>
-            <button className="off" onClick={() => move(j.id, "killed")}>Loại hẳn</button>
+            <KillPicker label="Loại hẳn" onPick={(reason, reasonText) => move(j.id, "killed", null, { reason, reasonText, reasonSource: "human" })} />
           </div>
         </div>
       ))}
@@ -1038,7 +1071,7 @@ function Sources({ sources, toggle, jobs }) {
 }
 
 /* ========================= RULES ========================= */
-function Rules({ rules, jobs, toggleRule, editRule, addRule, rerun }) {
+function Rules({ rules, jobs, toggleRule, editRule, addRule, rerun, killStats }) {
   // Cùng điều kiện với hồi sinh ở server: số hiện ra = số tin quay về khi tắt luật.
   const stat = (id) => jobs.filter((j) => j.killedBy === id && j.decidedBy === "rule").length;
   const total = jobs.length || 1;
@@ -1098,6 +1131,28 @@ function Rules({ rules, jobs, toggleRule, editRule, addRule, rerun }) {
         );
       })}
       <button className="ghost" onClick={addRule}>Thêm luật</button>
+
+      <h3 className="grp">Loại bằng tay theo lý do, 30 ngày</h3>
+      <p className="advice">
+        Lý do mày chọn khi bấm Loại ở Hàng đọc, Rà soát, Phỏng vấn, Từ chối — cùng mã với lý do của model.
+        Cột cuối: trong số tin mày loại vì lý do đó, bao nhiêu tin model đang nói on-profile. Số này cao ở một
+        lý do nghĩa là model chưa hiểu mày ở điểm đó. Tin đã hoàn tác không tính. Phím 4 ở Hộp đến không hỏi lý do.
+      </p>
+      {!killStats.length ? <p className="dim small">Chưa có tin nào bị loại tay trong 30 ngày.</p> : (
+        <table className="yield">
+          <thead><tr><th>Nguồn</th><th>Lý do</th><th>Số tin</th><th>Model đã nói on-profile</th></tr></thead>
+          <tbody>
+            {killStats.map((r, i) => (
+              <tr key={i}>
+                <td>{r.source ? SOURCE_LABEL[r.source] : <span className="dim">không ghi lý do</span>}</td>
+                <td>{r.reason ? KILL_LABEL[r.reason] : <span className="dim">phím 4, thùng khác</span>}</td>
+                <td>{r.count}</td>
+                <td>{r.modelOn == null ? <span className="dim">—</span> : r.modelOn}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -1271,6 +1326,8 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .tagDl{background:#DDE6EE;color:var(--signal);padding:1px 6px;border-radius:3px}
 .tagDl.past{background:#EADADA;color:#7A2E2E}
 .tagDays{color:var(--signal);font-variant-numeric:tabular-nums}
+.killPick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;max-width:380px}
+.killPick input{border:1px solid var(--line);border-radius:5px;padding:3px 8px;font-size:12.5px;width:150px}
 .fitHead{display:flex;flex-direction:column;gap:8px}
 .fitRun{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .fitRun .ghost{align-self:center}

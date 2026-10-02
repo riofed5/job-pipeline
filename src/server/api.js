@@ -44,6 +44,7 @@ app.get("/api/sources", (req, res) => res.json(config.listSources(db)));
 app.get("/api/settings", (req, res) =>
   res.json({ ...config.getSettings(db), canUndo: jobs.canUndo(db), ...backups.status() }));
 app.get("/api/export", (req, res) => res.json(exportAll(db)));
+app.get("/api/stats/kills", (req, res) => res.json(jobs.killReasonStats(db, Number(req.query.days) || 30)));
 
 /* ---------- tin ---------- */
 app.post("/api/ingest", (req, res) => {
@@ -51,7 +52,8 @@ app.post("/api/ingest", (req, res) => {
   res.json(jobs.ingest(db, items, manualSource(source)));
 });
 app.post("/api/jobs/:id/status", (req, res) => {
-  const job = jobs.decide(db, req.params.id, req.body?.status, req.body?.outcome ?? null);
+  const { status, outcome = null, reason = null, reasonText = null, reasonSource = null } = req.body ?? {};
+  const job = jobs.decide(db, req.params.id, status, outcome, { reason, reasonText, reasonSource });
   // Tin vào Hàng đọc (phím 1) → phân tích fit ở nền. Chưa cấu hình key thì thôi, không lỗi.
   if (job.status === "queue" && enrichConfigured()) enricher.start();
   res.json({ job, canUndo: jobs.canUndo(db), enrich: enricher.status() });

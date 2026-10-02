@@ -19,6 +19,11 @@ export const REASON_LABEL = {
   none: "",
 };
 
+/* Lý do loại tay (events.reason): mã của model + dead, other. Bản gốc ở core/jobs.js KILL_REASONS; check.js so hai bản. */
+export const KILL_REASONS = ["domain", "stack", "level_low", "level_high", "language", "location", "dead", "other"];
+export const KILL_LABEL = { ...REASON_LABEL, dead: "tin chết", other: "khác" };
+export const SOURCE_LABEL = { human: "người chọn", model: "theo đề xuất của model" };
+
 export const DEAD_HTTP = [404, 410];
 
 export const isDead = (j, today) =>

@@ -31,7 +31,8 @@ export const api = {
   exportAll: () => send("GET", "/api/export"),
 
   ingest: (source, items) => send("POST", "/api/ingest", { source, items }),
-  decide: (id, status, outcome = null) => send("POST", `/api/jobs/${encodeURIComponent(id)}/status`, { status, outcome }),
+  decide: (id, status, outcome = null, extra = {}) => send("POST", `/api/jobs/${encodeURIComponent(id)}/status`, { status, outcome, ...extra }),
+  killStats: () => send("GET", "/api/stats/kills?days=30"),
   undo: () => send("POST", "/api/undo"),
   archiveStale: () => send("POST", "/api/archive-stale"),
 

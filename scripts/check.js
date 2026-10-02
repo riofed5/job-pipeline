@@ -23,7 +23,7 @@ import * as R from "../src/core/replies.js";
 import { searchQuery, fetchCompanyMails, assessReplies, buildRepliesRequest, createRepliesStep, repliesConfig } from "../src/ingest/replies.js";
 import { exportAll } from "../src/core/db.js";
 import { fetchJd, jdFromHtml, normalizeFit, buildFitRequest, assessFit, createEnricher, cvHashOf, loadCv, exportJd, slug, MAX_JD_CHARS } from "../src/ingest/enrich.js";
-import { fitTab, fitCounts, isDead, summarizeFit } from "../src/ui/fit.js";
+import { fitTab, fitCounts, isDead, summarizeFit, KILL_REASONS as UI_KILL_REASONS } from "../src/ui/fit.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -1693,6 +1693,62 @@ check("xuất JD: readJd trả description cho đúng một tin; file jd/<compan
   eq(err?.status, 400, "không JD → 400");
   fs.rmSync(dir, { recursive: true, force: true });
   ok(!("description" in J.listJobs(db)[0]), "danh sách vẫn không có description");
+});
+
+check("lý do loại (v15): picker ghi human, bulk ghi model, phím 4 không ghi; reason kèm status khác killed / mã lạ / thiếu nguồn → 400; U giữ event", () => {
+  const db = openDb(":memory:");
+  const cols = db.pragma("table_info(events)").map((c) => c.name);
+  for (const c of ["reason", "reason_text", "reason_source"]) ok(cols.includes(c), `thiếu cột ${c}`);
+  eq(UI_KILL_REASONS, J.KILL_REASONS, "ui/fit.js và core/jobs.js cùng danh sách mã");
+  const a = add(db, "A"), b = add(db, "B"), c = add(db, "C"), d = add(db, "D");
+  J.decide(db, a.id, "killed", null, { reason: "level_high", reasonSource: "human" });
+  J.decide(db, b.id, "killed", null, { reason: "other", reasonText: "  không rõ công ty  ", reasonSource: "human" });
+  J.decide(db, c.id, "killed", null, { reason: "stack", reasonSource: "model" });
+  J.decide(db, d.id, "killed"); // phím 4
+  const ev = (id) => db.prepare("SELECT reason, reason_text, reason_source FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(id);
+  eq(ev(a.id), { reason: "level_high", reason_text: null, reason_source: "human" }, "picker");
+  eq(ev(b.id), { reason: "other", reason_text: "không rõ công ty", reason_source: "human" }, "khác + chữ, cắt khoảng trắng");
+  eq(ev(c.id), { reason: "stack", reason_text: null, reason_source: "model" }, "bulk theo model");
+  eq(ev(d.id), { reason: null, reason_text: null, reason_source: null }, "phím 4 không hỏi");
+  const bad = (args, what) => { let err; try { J.decide(db, ...args); } catch (e) { err = e; } eq(err?.status, 400, what); };
+  bad([a.id, "queue", null, { reason: "stack", reasonSource: "human" }], "reason kèm status khác killed");
+  bad([a.id, "killed", null, { reason: "lazy", reasonSource: "human" }], "mã lạ");
+  bad([a.id, "killed", null, { reason: "stack" }], "thiếu nguồn");
+  bad([a.id, "killed", null, { reason: "stack", reasonSource: "rule" }], "nguồn lạ");
+  bad([a.id, "killed", null, { reasonText: "x" }], "chữ mà không có mã");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n, 8, "400 không ghi event");
+  J.undo(db);
+  eq(job(db, d.id).status, "new", "U hoàn tác tin cuối");
+  eq(db.prepare("SELECT reason FROM events WHERE job_id = ? AND to_status = 'killed'").get(a.id).reason, "level_high", "event cũ giữ reason");
+  invariants(db);
+});
+
+check("killReasonStats: gom theo (lý do, nguồn); modelOn chỉ với human và theo fit hiện tại; bỏ event đã hoàn tác; ngoài 30 ngày không tính; NULL thành dòng riêng", () => {
+  const db = openDb(":memory:");
+  const on = { fit: "on", reason: "none", confidence: "high", gaps: [], strengths: [] };
+  const off = { ...on, fit: "off", reason: "stack" };
+  const mk = (t, fit) => { const j = add(db, t); if (fit) J.setFit(db, j.id, { fit, cvHash: "h" }); return j; };
+  const a = mk("A", on), b = mk("B", on), c = mk("C", off), d = mk("D", on), e = mk("E", off), f = mk("F", null), g = mk("G", on), h = mk("H", on);
+  const kill = (j, reason, src = "human") => J.decide(db, j.id, "killed", null, reason ? { reason, reasonSource: src } : {});
+  kill(a, "stack"); kill(b, "stack"); kill(c, "stack");            // human stack: 3, model on: 2
+  kill(d, "level_high");                                           // human level_high: 1, on: 1
+  kill(e, "stack", "model");                                       // model stack: 1, modelOn null
+  kill(f, null); kill(g, null);                                    // không ghi lý do: 2
+  kill(h, "dead"); J.undo(db);                                     // hoàn tác → không tính
+  const old = mk("OLD", on); kill(old, "domain");
+  db.prepare("UPDATE events SET at = ? WHERE job_id = ? AND to_status = 'killed'").run(new Date(Date.now() - 31 * DAY).toISOString(), old.id);
+  // Luật loại (by = rule) không phải loại tay.
+  const r = C.createRule(db); C.patchRule(db, r.id, { field: "title", match: "intern", action: "kill" }); J.toggleRule(db, r.id);
+  add(db, "Intern");
+  const rows = J.killReasonStats(db, 30);
+  eq(rows, [
+    { reason: "stack", source: "human", count: 3, modelOn: 2 },
+    { reason: "level_high", source: "human", count: 1, modelOn: 1 },
+    { reason: "stack", source: "model", count: 1, modelOn: null },
+    { reason: null, source: null, count: 2, modelOn: null },
+  ], "bảng");
+  eq(J.killReasonStats(db, 60).some((x) => x.reason === "domain"), true, "cửa sổ 60 ngày thì thấy tin cũ");
+  invariants(db);
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

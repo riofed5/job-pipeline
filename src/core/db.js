@@ -243,6 +243,15 @@ const MIGRATIONS = [
     if (!has("jd_source")) db.exec("ALTER TABLE jobs ADD COLUMN jd_source TEXT CHECK (jd_source IN ('ats','fetched','title_only'))");
     if (!has("jd_http_status")) db.exec("ALTER TABLE jobs ADD COLUMN jd_http_status INTEGER");
   },
+  /* v15 — lý do loại tay. events.reason cùng mã với fit.reason (+ dead, other) để so người với model;
+     reason_source: human = người chọn ở picker, model = "Loại tất cả off-profile" chép fit.reason của tin.
+     Phím 4 ở Hộp đến và nút Loại ở thùng khác không hỏi → NULL. Chỉ event by = human, to_status = killed có giá trị. */
+  (db) => {
+    const has = (col) => db.pragma("table_info(events)").some((c) => c.name === col);
+    if (!has("reason")) db.exec("ALTER TABLE events ADD COLUMN reason TEXT CHECK (reason IN ('domain','stack','level_low','level_high','language','location','dead','other'))");
+    if (!has("reason_text")) db.exec("ALTER TABLE events ADD COLUMN reason_text TEXT");
+    if (!has("reason_source")) db.exec("ALTER TABLE events ADD COLUMN reason_source TEXT CHECK (reason_source IN ('human','model'))");
+  },
 ];
 
 export function openDb(file) {
