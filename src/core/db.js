@@ -230,6 +230,19 @@ const MIGRATIONS = [
     `);
     if (!db.pragma("table_info(companies)").some((c) => c.name === "aliases")) db.exec("ALTER TABLE companies ADD COLUMN aliases TEXT");
   },
+  /* v14 — bước 5, phân tích fit (enrich.js). fit_json: kết quả Claude {fit, reason, confidence, gaps, strengths,
+     years_required, finnish_required} — chỉ là nhãn, không đổi status. fit_cv_hash: hash profile/cv.md lúc phân tích,
+     lệch hash hiện tại = "CV đã đổi, phân tích lại". jd_source: ats | fetched | title_only — JD lấy từ đâu;
+     title_only thì confidence bị ép low. jd_http_status: mã HTTP lần fetch gần nhất; 404/410 là tin chết (do hệ thống,
+     cùng với closed_at và deadline đã qua). JD fetch được ghi vào jobs.description có sẵn. */
+  (db) => {
+    const has = (col) => db.pragma("table_info(jobs)").some((c) => c.name === col);
+    if (!has("fit_json")) db.exec("ALTER TABLE jobs ADD COLUMN fit_json TEXT");
+    if (!has("fit_cv_hash")) db.exec("ALTER TABLE jobs ADD COLUMN fit_cv_hash TEXT");
+    if (!has("fit_at")) db.exec("ALTER TABLE jobs ADD COLUMN fit_at TEXT");
+    if (!has("jd_source")) db.exec("ALTER TABLE jobs ADD COLUMN jd_source TEXT CHECK (jd_source IN ('ats','fetched','title_only'))");
+    if (!has("jd_http_status")) db.exec("ALTER TABLE jobs ADD COLUMN jd_http_status INTEGER");
+  },
 ];
 
 export function openDb(file) {

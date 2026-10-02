@@ -22,6 +22,8 @@ import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep,
 import * as R from "../src/core/replies.js";
 import { searchQuery, fetchCompanyMails, assessReplies, buildRepliesRequest, createRepliesStep, repliesConfig } from "../src/ingest/replies.js";
 import { exportAll } from "../src/core/db.js";
+import { fetchJd, jdFromHtml, normalizeFit, buildFitRequest, assessFit, createEnricher, cvHashOf, loadCv, summarizeFit, MAX_JD_CHARS } from "../src/ingest/enrich.js";
+import { fitTab, fitCounts, isDead } from "../src/ui/fit.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -1404,6 +1406,275 @@ check("replies.js (core và ingest) không gọi decide/writeStatus, không có 
     ok(!/\bdecide\(|writeStatus\(|confirmReply\(/.test(src), `${f} đụng đường đổi trạng thái tin`);
     ok(!/from "\.\.?\/(core\/)?jobs\.js"/.test(src), `${f} import jobs.js`);
   }
+});
+
+/* ============================ bước 5: phân tích fit ============================ */
+
+check("v14: cột fit/JD có mặt; danh sách trả fit, jdSource, jdHttpStatus; vẫn không trả description", () => {
+  const db = openDb(":memory:");
+  const cols = db.pragma("table_info(jobs)").map((c) => c.name);
+  for (const c of ["fit_json", "fit_cv_hash", "fit_at", "jd_source", "jd_http_status"]) ok(cols.includes(c), `thiếu cột ${c}`);
+  const a = add(db, "Backend Engineer", "Wolt", { description: "JD dài" });
+  J.setJd(db, a.id, { source: "fetched", httpStatus: 200, description: "JD mới", deadline: "2026-12-01" });
+  J.setFit(db, a.id, { fit: { fit: "on", reason: "none", confidence: "high", gaps: [], strengths: ["x"] }, cvHash: "h1", deadline: "2026-11-01" });
+  const j = J.listJobs(db)[0];
+  eq([j.fit.fit, j.fitCvHash, j.jdSource, j.jdHttpStatus, j.deadline], ["on", "h1", "fetched", 200, "2026-12-01"], "trả cột mới; deadline JSON-LD thắng deadline model");
+  ok(j.fitAt, "fit_at ghi");
+  ok(!("description" in j), "description không ra danh sách");
+  eq(job(db, a.id).description, "JD mới", "description ghi khi fetch được");
+  J.setJd(db, a.id, { source: "title_only", httpStatus: 404 });
+  eq([job(db, a.id).description, job(db, a.id).jd_source, job(db, a.id).jd_http_status], ["JD mới", "title_only", 404], "title_only không xóa description cũ");
+  let err; try { J.setJd(db, a.id, { source: "model" }); } catch (e) { err = e; }
+  eq(err?.status, 400, "jd_source lạ → 400");
+  eq(J.listJobs(db)[0].status, "new", "setJd/setFit không đổi status");
+  eq(one(db, "SELECT COUNT(*) n FROM events").n, 1, "không ghi event");
+  invariants(db);
+});
+
+check("pendingFit: chỉ Hàng đọc; chưa có fit hoặc CV đổi; trần; description đi kèm để khỏi fetch lại", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "A", "Wolt", { description: "JD của A" });
+  const b = add(db, "B", "Wolt");
+  const c = add(db, "C", "Wolt");
+  const d = add(db, "D", "Wolt");
+  for (const j of [a, b, c]) J.decide(db, j.id, "queue");
+  J.decide(db, d.id, "applied");
+  J.setFit(db, b.id, { fit: { fit: "on" }, cvHash: "h1" });
+  J.setFit(db, c.id, { fit: { fit: "off" }, cvHash: "h0" });
+  eq(J.pendingFit(db, "h1").map((x) => x.title).sort(), ["A", "C"], "A chưa có fit, C fit với CV cũ, B xong, D không ở Hàng đọc");
+  eq(J.countPendingFit(db, "h1"), 2, "đếm");
+  eq(J.pendingFit(db, "h1", 1).length, 1, "trần");
+  eq(J.pendingFit(db, "h1").find((x) => x.title === "A").description, "JD của A", "description đi kèm");
+});
+
+check("jdFromHtml: JSON-LD JobPosting ưu tiên (validThrough → deadline) → <main> → cả trang; cắt 8k", () => {
+  const long = "Lorem ipsum dolor sit amet. ".repeat(20);
+  const ld = `<html><head><script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@type": "JobPosting", title: "X", description: `<p>${long}</p>`, validThrough: "2026-10-31T23:59:59Z" })}</script></head><body><nav>menu menu</nav><main>${long}</main></body></html>`;
+  let r = jdFromHtml(ld);
+  eq([r.via, r.deadline], ["ld+json", "2026-10-31"], "JSON-LD trước");
+  ok(!/menu/.test(r.text), "không dính nav");
+  r = jdFromHtml(`<html><body><nav>menu menu</nav><main><h1>Role</h1><p>${long}</p></main><footer>foot</footer></body></html>`);
+  eq([r.via, r.deadline], ["main", null], "main khi không có JSON-LD");
+  ok(!/menu|foot/.test(r.text) && /Role/.test(r.text), "chỉ phần main");
+  r = jdFromHtml(`<html><body><div>${long}</div></body></html>`);
+  eq(r.via, "body", "không main → cả trang");
+  r = jdFromHtml(`<html><body><main><form>Sign in Join now Password</form><div class="description__text description__text--rich"><section class="show-more-less-html"><div class="show-more-less-html__markup">${long}</div></section></div><ul>similar jobs</ul></main></body></html>`);
+  eq(r.via, "description", "khối mô tả theo class (LinkedIn trang khách)");
+  ok(!/Sign in|Password/.test(r.text) && r.text.startsWith("Lorem"), "bỏ modal đăng nhập trước mô tả");
+  const graph = `<script type="application/ld+json">{"@graph":[{"@type":"Organization"},{"@type":["JobPosting"],"description":"${long}","validThrough":"2026-11-05"}]}</script>`;
+  eq(jdFromHtml(graph).deadline, "2026-11-05", "@graph và @type mảng");
+});
+
+await checkAsync("fetchJd: 200 → fetched; 404 → title_only kèm mã; trang login/ngắn/lỗi mạng → title_only; không link → title_only", async () => {
+  const long = "Lorem ipsum dolor sit amet. ".repeat(500);
+  const get = async (url) => {
+    if (/404/.test(url)) return { status: 404, body: "", url };
+    if (/login/.test(url)) return { status: 200, body: `<main>${long}</main>`, url: "https://www.linkedin.com/login?x" };
+    if (/short/.test(url)) return { status: 200, body: "<main>hi</main>", url };
+    if (/boom/.test(url)) throw new Error("ECONNRESET");
+    return { status: 200, body: `<main>${long}</main>`, url };
+  };
+  let r = await fetchJd("https://x/ok", { get });
+  eq([r.source, r.status, r.text.length], ["fetched", 200, MAX_JD_CHARS], "fetched, cắt 8k");
+  r = await fetchJd("https://x/404", { get });
+  eq([r.source, r.status], ["title_only", 404], "404");
+  r = await fetchJd("https://www.linkedin.com/jobs/view/login", { get });
+  eq([r.source, r.why], ["title_only", "trang đăng nhập"], "login");
+  r = await fetchJd("https://x/short", { get });
+  eq([r.source, r.status], ["title_only", 200], "quá ngắn");
+  r = await fetchJd("https://x/boom", { get });
+  eq([r.source, r.status, r.why], ["title_only", null, "ECONNRESET"], "lỗi mạng không ném");
+  eq((await fetchJd(null, { get })).source, "title_only", "không link");
+});
+
+check("normalizeFit: không JD → confidence low dù model nói high; on → reason none; off thiếu reason → domain; gaps 3, strengths 2; deadline/years hợp lệ", () => {
+  const raw = { fit: "on", reason: "stack", confidence: "high", gaps: ["a", "b", "c", "d"], strengths: ["s1", "s2", "s3"], years_required: 5, finnish_required: "yes", deadline: "2026-10-30T00:00:00" };
+  let f = normalizeFit(raw, { hasJd: false });
+  eq([f.confidence, f.reason, f.gaps.length, f.strengths.length, f.finnish_required, f.deadline, f.years_required], ["low", "none", 3, 2, false, "2026-10-30", 5], "không JD");
+  f = normalizeFit(raw, { hasJd: true });
+  eq(f.confidence, "high", "có JD thì tin model");
+  f = normalizeFit({ fit: "off", reason: "none", confidence: "x", years_required: 99, deadline: "soon" }, { hasJd: true });
+  eq([f.reason, f.confidence, f.years_required, f.deadline, f.gaps], ["domain", "low", null, null, []], "off thiếu reason, giá trị rác");
+  let err; try { normalizeFit({ fit: "maybe" }, { hasJd: true }); } catch (e) { err = e; }
+  ok(/on\/off/.test(err?.message ?? ""), "fit lạ → lỗi");
+});
+
+check("buildFitRequest: Fable, effort high, không có tham số thinking, json_schema, CV trong system có cache_control, JD trong message", () => {
+  const req = buildFitRequest({ cv: "CV TEXT", job: { title: "T", company: "C", location: "Helsinki" }, jd: "JD TEXT" }, "claude-fable-5-1");
+  eq(req.model, "claude-fable-5-1", "model");
+  eq(req.output_config.effort, "high", "effort");
+  ok(!("thinking" in req), "không gửi thinking (Fable luôn bật)");
+  eq(req.output_config.format.type, "json_schema", "json_schema");
+  eq(req.output_config.format.schema.required.sort(), ["confidence", "deadline", "finnish_required", "fit", "gaps", "reason", "strengths", "years_required"], "đủ trường");
+  ok(req.system[1].text.includes("CV TEXT") && req.system[1].cache_control?.type === "ephemeral", "CV trong system, cache");
+  const body = JSON.parse(req.messages[0].content);
+  eq([body.title, body.company, body.location, body.description], ["T", "C", "Helsinki", "JD TEXT"], "tin trong message");
+  eq(JSON.parse(buildFitRequest({ cv: "x", job: { title: "T", company: "C" }, jd: null }, "m").messages[0].content).description, null, "không JD → null");
+});
+
+await checkAsync("assessFit: HTTP lỗi, refusal, max_tokens → ném; JSON hợp lệ → normalize", async () => {
+  const reply = (data, status = 200) => async () => ({ ok: status === 200, status, json: async () => data });
+  const args = { cv: "cv", job: { title: "T", company: "C" }, jd: null };
+  const opts = (fetchFn) => ({ apiKey: "k", fetchFn });
+  let err;
+  try { await assessFit(args, opts(reply({ error: { message: "bad" } }, 400))); } catch (e) { err = e; }
+  ok(/HTTP 400/.test(err?.message), "HTTP lỗi");
+  try { await assessFit(args, opts(reply({ stop_reason: "refusal", content: [] }))); } catch (e) { err = e; }
+  ok(/từ chối/.test(err?.message), "refusal");
+  try { await assessFit(args, opts(reply({ stop_reason: "max_tokens", content: [] }))); } catch (e) { err = e; }
+  ok(/max_tokens/.test(err?.message), "max_tokens");
+  const good = { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ fit: "off", reason: "level_high", confidence: "high", gaps: ["g"], strengths: [], years_required: 8, finnish_required: false, deadline: null }) }] };
+  const f = await assessFit(args, opts(reply(good)));
+  eq([f.fit, f.reason, f.confidence, f.years_required], ["off", "level_high", "low", 8], "không JD → low dù model high");
+  try { await assessFit(args, { apiKey: "", fetchFn: reply(good) }); } catch (e) { err = e; }
+  ok(/ANTHROPIC_API_KEY/.test(err?.message), "thiếu key");
+});
+
+check("loadCv: thiếu file hay trống → lỗi; hash đổi theo nội dung", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-"));
+  let err; try { loadCv(path.join(dir, "cv.md")); } catch (e) { err = e; }
+  ok(/chưa có/.test(err?.message), "thiếu file");
+  fs.writeFileSync(path.join(dir, "cv.md"), "  \n");
+  try { loadCv(path.join(dir, "cv.md")); } catch (e) { err = e; }
+  ok(/trống/.test(err?.message), "trống");
+  fs.writeFileSync(path.join(dir, "cv.md"), "CV v1");
+  const h1 = loadCv(path.join(dir, "cv.md")).hash;
+  fs.writeFileSync(path.join(dir, "cv.md"), "CV v2");
+  ok(h1 !== loadCv(path.join(dir, "cv.md")).hash && h1 === cvHashOf("CV v1"), "hash theo nội dung");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+await checkAsync("lượt phân tích: ATS dùng description sẵn, tin khác fetch cách nhau 1 giây, 404 ghi mã; fit ghi; jobs.status/events KHÔNG đổi một byte; title_only → low; trần 20; CV đổi → chạy lại; thiếu CV → lỗi, không ghi", async () => {
+  const db = openDb(":memory:");
+  const mk = (t, extra = {}) => { const j = add(db, t, "Wolt", extra); J.decide(db, j.id, "queue"); return j; };
+  const ats = mk("ATS job", { description: "JD từ feed ".repeat(30) });
+  const li = mk("LinkedIn job", { url: "https://www.linkedin.com/jobs/view/123" });
+  const gone = mk("Gone job", { url: "https://x/gone" });
+  const dead = mk("Dead already", { url: "https://x/404" }); J.decide(db, dead.id, "killed"); // không ở Hàng đọc
+  for (let i = 0; i < 22; i++) mk(`Bulk ${i}`, { description: "JD ".repeat(100) });
+  const snapshot = () => JSON.stringify([
+    db.prepare("SELECT id, status, outcome, decided_by, killed_by, status_at FROM jobs ORDER BY id").all(),
+    db.prepare("SELECT * FROM events ORDER BY id").all(),
+  ]);
+  const before = snapshot();
+
+  const fetched = [];
+  const getJd = async (url) => {
+    fetched.push(url);
+    if (/404/.test(url) || /gone/.test(url)) return { source: "title_only", status: 404, why: "HTTP 404" };
+    return { source: "fetched", status: 200, text: "JD từ LinkedIn ".repeat(30), deadline: "2026-12-31" };
+  };
+  const assessed = [];
+  const assess = async ({ cv, job: j, jd }) => {
+    assessed.push([j.title, Boolean(jd), cv]);
+    return normalizeFit({ fit: j.title === "Gone job" ? "off" : "on", reason: "stack", confidence: "high", gaps: ["g1"], strengths: ["s1"], years_required: 3, finnish_required: false, deadline: "2026-11-11" }, { hasJd: Boolean(jd) });
+  };
+  let cvText = "CV v1";
+  const readCv = () => { if (!cvText) throw new Error("chưa có profile/cv.md"); return { text: cvText, hash: cvHashOf(cvText) }; };
+  const env = { ANTHROPIC_API_KEY: "k" };
+  const en = createEnricher(db, { env, fetchJd: getJd, assess, readCv, gapMs: 0 });
+
+  eq(en.status().pending, 25, "25 tin chờ trước khi chạy");
+  eq(en.start().started, true, "bắt đầu");
+  eq(en.start().started, false, "đang chạy thì không chạy chồng");
+  let s = await en.wait();
+  eq([s.results.length, s.error], [20, null], "trần 20 một lượt");
+  eq(s.pending, 5, "còn 5 tin chờ");
+  eq(snapshot(), before, "jobs.status/events không đổi một byte");
+  const round1 = s.results;
+  eq(en.start().started, true, "lượt 2");
+  s = await en.wait();
+  eq([s.results.length, s.pending], [5, 0], "lượt 2 xong hết");
+  const all = [...round1, ...s.results];
+  eq(snapshot(), before, "vẫn không đổi");
+  eq([...fetched].sort(), ["https://www.linkedin.com/jobs/view/123", "https://x/gone"], "chỉ fetch tin không có description, không fetch tin đã loại");
+  const jl = J.listJobs(db);
+  const of = (id) => jl.find((x) => x.id === id);
+  eq([of(ats.id).jdSource, of(ats.id).fit.fit, of(ats.id).fit.confidence], ["ats", "on", "high"], "ATS: description sẵn");
+  eq([of(li.id).jdSource, of(li.id).jdHttpStatus, of(li.id).fit.confidence, of(li.id).deadline], ["fetched", 200, "high", "2026-12-31"], "LinkedIn: fetched, deadline JSON-LD thắng model");
+  eq(job(db, li.id).description.startsWith("JD từ LinkedIn"), true, "JD fetch ghi vào description");
+  eq([of(gone.id).jdSource, of(gone.id).jdHttpStatus, of(gone.id).fit.fit, of(gone.id).fit.confidence, of(gone.id).deadline], ["title_only", 404, "off", "low", "2026-11-11"], "404: title_only, confidence ép low, deadline model điền chỗ trống");
+  eq(assessed.find((x) => x[0] === "Gone job")[1], false, "title_only → Claude nhận JD null");
+  ok(assessed.every((x) => x[2] === "CV v1"), "CV vào mọi lần gọi");
+  eq(summarizeFit(all), "24 on-profile · 1 off-profile · 1 không lấy được JD", "tóm tắt");
+
+  // Lần 3: không gì chờ → không gọi.
+  const n = assessed.length;
+  en.start(); s = await en.wait();
+  eq([s.results.length, assessed.length], [0, n], "không có gì chờ thì không gọi");
+
+  // CV đổi → mọi tin ở Hàng đọc chờ lại; tin đã có description không fetch lại.
+  cvText = "CV v2";
+  eq(en.status().pending, 25, "CV đổi → 25 tin chờ");
+  fetched.length = 0;
+  en.start(); await en.wait(); en.start(); s = await en.wait();
+  eq(s.pending, 0, "phân tích lại hết");
+  eq(fetched, ["https://x/gone"], "chỉ fetch lại tin title_only (chưa có description)");
+  eq(of(li.id).fitCvHash !== J.listJobs(db).find((x) => x.id === li.id).fitCvHash, true, "hash mới");
+  eq(snapshot(), before, "vẫn không đổi");
+
+  // Thiếu CV → lỗi, không ghi, không gọi.
+  cvText = "";
+  const m = assessed.length;
+  const st = en.status();
+  eq([st.cvHash, st.pending], [null, null], "status báo thiếu CV");
+  ok(/cv\.md/.test(st.cvError), "lý do");
+  en.start(); s = await en.wait();
+  ok(/cv\.md/.test(s.error), "lượt chạy báo lỗi");
+  eq(assessed.length, m, "không gọi Claude");
+  eq(snapshot(), before, "không ghi gì");
+
+  // Thiếu key → lỗi.
+  cvText = "CV v3";
+  const en2 = createEnricher(db, { env: {}, fetchJd: getJd, assess, readCv, gapMs: 0 });
+  en2.start(); s = await en2.wait();
+  ok(/ANTHROPIC_API_KEY/.test(s.error), "thiếu key");
+  invariants(db);
+});
+
+await checkAsync("lượt phân tích: lỗi một tin (Claude từ chối) không chặn tin sau; tin lỗi vẫn chờ", async () => {
+  const db = openDb(":memory:");
+  const a = add(db, "A", "Wolt", { description: "JD ".repeat(100) }); J.decide(db, a.id, "queue");
+  const b = add(db, "B", "Wolt", { description: "JD ".repeat(100) }); J.decide(db, b.id, "queue");
+  const assess = async ({ job: j }) => { if (j.title === "B") throw new Error("Claude từ chối tin này"); return normalizeFit({ fit: "on", reason: "none", confidence: "high", gaps: [], strengths: [], years_required: null, finnish_required: false, deadline: null }, { hasJd: true }); };
+  const en = createEnricher(db, { env: { ANTHROPIC_API_KEY: "k" }, assess, readCv: () => ({ text: "cv", hash: "h" }), gapMs: 0 });
+  en.start(); const s = await en.wait();
+  eq(s.results.map((r) => [r.title, Boolean(r.fit), r.error]).sort(), [["A", true, null], ["B", false, "Claude từ chối tin này"]], "B lỗi, A vẫn chạy");
+  eq(s.pending, 1, "B vẫn chờ");
+  eq(summarizeFit(s.results), "1 on-profile · 0 off-profile · 1 lỗi", "tóm tắt có lỗi");
+});
+
+check("fitTab: Dead (closed_at, deadline qua, 404/410) trước mọi thứ; chưa fit hoặc CV đổi → chờ; đếm đủ bốn tab, mỗi tin một tab", () => {
+  const today = "2026-10-02";
+  const on = { fit: { fit: "on" }, fitCvHash: "h" };
+  const off = { fit: { fit: "off" }, fitCvHash: "h" };
+  const jobs = [
+    { id: 1, ...on },
+    { id: 2, ...off },
+    { id: 3, ...on, closedAt: "2026-09-30T00:00:00Z" },
+    { id: 4, ...on, deadline: "2026-10-01" },
+    { id: 5, ...on, deadline: "2026-10-02" },      // hôm nay vẫn còn hạn
+    { id: 6, ...off, jdHttpStatus: 404 },
+    { id: 7, ...on, jdHttpStatus: 410 },
+    { id: 8 },
+    { id: 9, ...on, fitCvHash: "old" },
+    { id: 10, fit: null, jdHttpStatus: 404 },
+  ];
+  const opts = { cvHash: "h", today };
+  eq(jobs.map((j) => fitTab(j, opts)), ["on", "off", "dead", "dead", "on", "dead", "dead", "pending", "pending", "dead"], "từng tin");
+  eq(fitCounts(jobs, opts), { on: 2, off: 1, dead: 5, pending: 2 }, "đếm");
+  eq(fitTab(jobs[8], { cvHash: null, today }), "on", "chưa có CV thì fit cũ vẫn hiện");
+  ok(!isDead({ deadline: "2026-10-01" }, undefined), "không có today thì deadline không tính");
+  eq(fitTab({ ...on, jdHttpStatus: 500 }, opts), "on", "500 không phải dead");
+});
+
+check("enrich.js không gọi decide/writeStatus/confirmReply; chỉ ghi qua jobs.setJd/setFit; fit.js không import gì", () => {
+  const src = fs.readFileSync(path.join(ROOT, "src/ingest/enrich.js"), "utf8");
+  ok(!/\bdecide\(|writeStatus\(|confirmReply\(|toggleRule\(|rerunRules\(|archiveStale\(/.test(src), "enrich.js đụng đường đổi trạng thái tin");
+  ok(!/\b(status|outcome)\s*=/.test(src.replace(/\/\*[\s\S]*?\*\//g, "")), "enrich.js gán status/outcome");
+  const calls = [...src.matchAll(/\bjobs\.(\w+)\(/g)].map((m) => m[1]);
+  eq([...new Set(calls)].sort(), ["countPendingFit", "pendingFit", "setFit", "setJd"], "chỉ bốn hàm đọc/ghi fit");
+  ok(!/^\s*import\b/m.test(fs.readFileSync(path.join(ROOT, "src/ui/fit.js"), "utf8")), "fit.js thuần");
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

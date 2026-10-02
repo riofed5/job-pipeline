@@ -33,7 +33,9 @@ function stmt(db, sql) {
 /* ---------------------------- đọc ---------------------------- */
 
 // Không có description: không màn hình nào ở bàn phân loại được hiện nó.
-const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at, deadline, outcome, applied_at";
+const JOB_COLUMNS = "id, title, company, location, url, ad_language, note, posted_at, found_at, status, status_at, decided_by, killed_by, closed_at, deadline, outcome, applied_at, fit_json, fit_cv_hash, fit_at, jd_source, jd_http_status";
+
+const parseFit = (s) => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
 
 const toJob = (r, channels) => ({
   id: r.id,
@@ -53,6 +55,11 @@ const toJob = (r, channels) => ({
   killedBy: r.killed_by,
   closedAt: r.closed_at,
   deadline: r.deadline,
+  fit: parseFit(r.fit_json),
+  fitCvHash: r.fit_cv_hash,
+  fitAt: r.fit_at,
+  jdSource: r.jd_source,
+  jdHttpStatus: r.jd_http_status,
   channels,
 });
 
@@ -328,6 +335,46 @@ export function rejectReply(db, replyId) {
   if (r.resolution) throw httpError(409, "đề xuất này đã xử lý rồi");
   replies.resolveReply(db, replyId, "wrong");
   return { reply: replies.getReply(db, replyId) };
+}
+
+/* ---------------------------- bước 5: JD và fit ----------------------------
+   Ba hàm dưới chỉ UPDATE cột JD/fit. KHÔNG đổi status, outcome, decided_by, không ghi event:
+   phân tích là nhãn để đọc nhanh hơn, quyết định vẫn là của người (CLAUDE.md: LLM không đổi trạng thái tin). */
+
+export const JD_SOURCES = ["ats", "fetched", "title_only"];
+
+/* Tin ở Hàng đọc cần phân tích: chưa có fit, hoặc fit làm với CV khác CV hiện tại. Có description (ATS, hoặc đã
+   fetch) thì trả về để khỏi fetch lại. Đây là chỗ DUY NHẤT description rời jobs.js — đi thẳng vào enrich, không ra UI. */
+export function pendingFit(db, cvHash, limit = 20) {
+  return stmt(db, `SELECT id, title, company, location, url, description, jd_source, deadline FROM jobs
+    WHERE status = 'queue' AND (fit_json IS NULL OR fit_cv_hash IS NOT ?)
+    ORDER BY found_at DESC, rowid ASC LIMIT ?`).all(cvHash, limit)
+    .map((r) => ({ id: r.id, title: r.title, company: r.company, location: r.location, url: r.url, description: r.description, jdSource: r.jd_source, deadline: r.deadline }));
+}
+
+export const countPendingFit = (db, cvHash) =>
+  stmt(db, "SELECT COUNT(*) n FROM jobs WHERE status = 'queue' AND (fit_json IS NULL OR fit_cv_hash IS NOT ?)").get(cvHash).n;
+
+/* Kết quả lấy JD. description chỉ ghi khi có chữ (title_only giữ nguyên cái đang có). deadline từ JSON-LD của trang
+   (validThrough) là dữ kiện của hệ thống, ghi đè. */
+export function setJd(db, id, { description = null, source, httpStatus = null, deadline = null }) {
+  if (!JD_SOURCES.includes(source)) throw httpError(400, `jd_source không hợp lệ: ${source}`);
+  return db.transaction(() => {
+    if (!row(db, id)) throw httpError(404, "không có tin này");
+    stmt(db, "UPDATE jobs SET jd_source = ?, jd_http_status = ? WHERE id = ?").run(source, httpStatus, id);
+    if (description) stmt(db, "UPDATE jobs SET description = ? WHERE id = ?").run(description, id);
+    if (deadline) stmt(db, "UPDATE jobs SET deadline = ? WHERE id = ?").run(deadline, id);
+  })();
+}
+
+/* Kết quả Claude. deadline do model trích chỉ điền chỗ trống — JSON-LD (setJd) thắng. */
+export function setFit(db, id, { fit, cvHash, deadline = null }) {
+  if (!fit || typeof fit !== "object") throw httpError(400, "thiếu fit");
+  return db.transaction(() => {
+    if (!row(db, id)) throw httpError(404, "không có tin này");
+    stmt(db, "UPDATE jobs SET fit_json = ?, fit_cv_hash = ?, fit_at = ? WHERE id = ?").run(JSON.stringify(fit), cvHash, now(), id);
+    if (deadline) stmt(db, "UPDATE jobs SET deadline = COALESCE(deadline, ?) WHERE id = ?").run(deadline, id);
+  })();
 }
 
 /* Tự lưu trữ theo thời gian nằm trong thùng (status_at), không theo found_at. */

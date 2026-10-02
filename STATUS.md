@@ -9,7 +9,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 3 | `imap.js` + parser bằng Claude | **Xong**, đã kéo thật 11 mail LinkedIn | 2026-09-17 |
 | 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp · `replies.js` · tab Phản hồi + aliases | **Xong**, chưa kéo thật qua Claude | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
-| 5 | `enrich.js` | Chưa | |
+| 5 | `enrich.js` + tab fit trong Hàng đọc | **Đang làm**: lõi + kiểm xong (1/2), API + UI còn lại | 2026-10-02 |
 | 6 | Cron + bảng theo dõi | Chưa | |
 
 ## Bước 2 + 3 có gì
@@ -28,7 +28,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Ashby**: feed trả cả tin `isListed: false` (tin đã gỡ, kể cả "Unlisted TEST job"); parser bỏ chúng nên `closed_at` bắt được.
 - **Luật mẫu thêm sau bước 1** (seed cho DB mới, migration cho DB đang dùng): `r_abroad` — location chứa `us, gb, uk, pl, de, se, dk, ca, india, norway` → loại (không dùng `in`, `no` vì trùng từ tiếng Anh); `r_openapp` — title chứa `open application, avoin hakemus, general application, spontaneous application` → Ngờ vực; `r_otherlang` — title chứa `german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare` → Ngờ vực (dấu * vì tiếng Đức/Thụy Điển ghép từ). Luật loại thắng luật Ngờ vực khi cả hai khớp.
 - **`jobs.deadline`**: cột có, để trống tới bước 5. Mỗi thùng có nút xếp: mới thêm (mặc định) / cũ nhất / deadline gần nhất, trống xếp cuối. Hộp đến và Rà soát không có nút xếp.
-- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 68 kịch bản. Schema v13.
+- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 80 kịch bản. Schema v14.
 
 ## Bước 3b có gì (1/3 — sau khi nộp)
 
@@ -52,6 +52,17 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **API**: `GET /api/replies` (đề xuất chờ, kèm tin và mail bằng chứng), `POST /api/replies/:id/confirm`, `POST /api/replies/:id/wrong`. `PATCH /api/companies/:id` nhận `aliases`.
 - **Tab Phản hồi** trong Công cụ, số đếm trên rail khi có đề xuất chờ. Mỗi dòng: tin, công ty, nhãn đề xuất, "nộp N ngày trước", thùng hiện tại, việc Xác nhận sẽ làm (hoặc "chỉ ghi nhận"), ghi chú của Claude, mail bằng chứng (subject, from, ngày, nút đọc mail). Không có mô tả công việc. Nút Xác nhận / Sai.
 - **Công ty**: ô tên khác hiện cho công ty đã có tin. Kết quả kéo ở Tìm job có dòng `Phản hồi`: N công ty · N mail mới · N lần gọi Claude · N đề xuất, kèm ghi chú trần 60 mail.
+
+## Bước 5 có gì (1/2 — lõi: `src/ingest/enrich.js`, `jobs.setJd` / `jobs.setFit`, `src/ui/fit.js`)
+
+- **Schema v14**: `jobs.fit_json`, `fit_cv_hash`, `fit_at`, `jd_source` (ats | fetched | title_only), `jd_http_status`. JD fetch được ghi vào `jobs.description` có sẵn. CHECK của status không nới. Danh sách tin trả thêm `fit`, `fitCvHash`, `fitAt`, `jdSource`, `jdHttpStatus`; vẫn không trả description.
+- **CV**: `profile/cv.md` (gitignore; mẫu `profile/cv.example.md`), đọc nguyên file, hash sha1. Mỗi tin ghi hash lúc phân tích; lệch hash hiện tại = "CV đã đổi" → tin về Chưa phân tích. Thiếu file → lượt chạy báo lỗi, không ghi gì. `CV_PATH` trong `.env` đổi được chỗ đọc.
+- **Lấy JD**: tin có `description` (ATS) dùng luôn. Tin khác fetch link gốc, timeout 20 giây, cách nhau 1 giây, kể cả `linkedin.com/jobs/view` không đăng nhập (đã thử thật: 200, lấy được mô tả đầy đủ). Thứ tự lấy chữ: JSON-LD `JobPosting` (có `validThrough` → `jobs.deadline`) → khối mô tả theo class (`show-more-less-html__markup`, `description__text` — LinkedIn không có JSON-LD và `<main>` mở đầu bằng modal đăng nhập) → `<main>`/`<article>` → cả trang. Cắt 8.000 ký tự. Không 200, redirect sang trang login, dưới 200 ký tự, hoặc lỗi mạng → `title_only`, giữ description cũ nếu có; HTTP 404/410 ghi vào `jd_http_status`.
+- **Claude**: `claude-fable-5-1` (đổi bằng `ENRICH_MODEL`), `output_config.effort = high`, json_schema, không gửi tham số `thinking` (Fable luôn bật). CV trong `system` kèm `cache_control`. Vào: CV + title/company/location + JD (null nếu không có). Ra: `fit` on|off, `reason` domain|stack|level_low|level_high|language|location|none, `confidence` high|low, `gaps` ≤3, `strengths` ≤2, `years_required`, `finnish_required`, `deadline`. **Code thắng model**: không có JD → confidence ép low; on → reason none; deadline model chỉ điền chỗ trống (JSON-LD thắng). refusal / max_tokens / HTTP lỗi → dòng lỗi, tin vẫn chờ, tin sau vẫn chạy.
+- **Lượt chạy** `createEnricher(db)`: như `createPuller` — `start()` trả về ngay, `status()` cho UI hỏi, không timer. Mỗi lượt lấy tin `status = 'queue'` chưa có fit hoặc hash lệch, mới thêm trước, **trần 20**. `status()` trả `cvHash`, `cvError`, `pending`.
+- **Dead do hệ thống** (`src/ui/fit.js`, thuần): `closedAt`, hoặc `deadline < hôm nay`, hoặc `jdHttpStatus` 404/410. `fitTab()`: Dead > Chưa phân tích > Off-profile > On-profile, mỗi tin đúng một tab; chưa có CV thì fit cũ vẫn hiện.
+- **Không đổi trạng thái**: `enrich.js` chỉ gọi `jobs.pendingFit / countPendingFit / setJd / setFit` (có lệnh quét canh); kịch bản kiểm so `jobs.status/outcome/decided_by` + `events` trước và sau từng byte qua ba lượt chạy và một lần đổi CV. 12 kịch bản mới.
+- Chưa nối: API, nút Phân tích lại, kích hoạt khi bấm 1, tab trong Hàng đọc, nút Xuất JD — commit 2.
 
 ## Còn mở
 
