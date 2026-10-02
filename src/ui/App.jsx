@@ -4,6 +4,7 @@ import { norm } from "../core/dedupe.js";
 import { SEED_COMPANIES } from "../core/seed.js";
 import { summarize } from "../ingest/summary.js";
 import { SORTS, sortJobs } from "./sort.js";
+import { FIT_TABS, REASON_LABEL, fitTab, fitCounts, summarizeFit } from "./fit.js";
 
 /* ============================================================
    Bàn phân loại — job pipeline (bản local)
@@ -64,6 +65,7 @@ export default function App() {
   const [loadErr, setLoadErr] = useState("");
   const [toast, setToast] = useState("");
   const [pull, setPull] = useState(null);
+  const [enrich, setEnrich] = useState(null); // bước 5: trạng thái lượt phân tích fit, cùng cơ chế với pull
   const [sort, setSort] = useState("newest"); // dùng chung cho mọi thùng, đổi thùng không mất
 
   const reload = useCallback(async () => {
@@ -93,6 +95,7 @@ export default function App() {
         // Tự kéo nếu lần gần nhất quá 12 tiếng — cùng cơ chế với sao lưu, server quyết, không có lịch.
         const p = await api.pullIfStale();
         setPull(p);
+        setEnrich(await api.enrichStatus());
         const notes = [];
         if (moved) notes.push(`${moved} tin nằm trong thùng quá ${s.maybeTTL} ngày đã chuyển sang Lưu trữ`);
         if (s.backupError) notes.push(`Sao lưu thất bại: ${s.backupError}`);
@@ -127,6 +130,34 @@ export default function App() {
     return () => { alive = false; clearInterval(t); };
   }, [pull?.running, reload]);
 
+  /* Đang phân tích fit: hỏi mỗi 2 giây, tải lại tin để tab Hàng đọc đầy dần. Cùng kiểu với kéo, không scheduler. */
+  useEffect(() => {
+    if (!enrich?.running) return;
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const e = await api.enrichStatus();
+        if (!alive) return;
+        setEnrich(e);
+        await reload();
+        if (!e.running) setToast(e.error ? `Phân tích hỏng: ${e.error}` : `Phân tích xong: ${summarizeFit(e.results || [])}`);
+      } catch (err) { if (alive) setToast(`Mất liên lạc khi phân tích: ${err.message}`); }
+    }, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, [enrich?.running, reload]);
+
+  const startEnrich = useCallback(async () => {
+    try {
+      const e = await api.enrich();
+      setEnrich(e);
+      if (!e.started) setToast("Đang phân tích rồi, chờ xong.");
+    } catch (e) { fail(e); }
+  }, [fail]);
+
+  const exportJd = useCallback((id) => {
+    api.exportJd(id).then(({ file }) => setToast(`Đã ghi ${file}`)).catch(fail);
+  }, [fail]);
+
   const startPull = useCallback(async () => {
     try {
       const p = await api.pull();
@@ -158,9 +189,10 @@ export default function App() {
   const move = useCallback((id, status, outcome = null) => {
     setJobs((js) => js.map((x) => (x.id === id ? { ...x, status, outcome: status === "applied" ? outcome : null, decidedBy: "human" } : x)));
     api.decide(id, status, outcome)
-      .then(({ job, canUndo }) => {
+      .then(({ job, canUndo, enrich: e }) => {
         setJobs((js) => js.map((x) => (x.id === id ? job : x)));
         setConf((c) => ({ ...c, canUndo }));
+        if (e) setEnrich(e); // tin vào Hàng đọc → server đã bắt đầu phân tích ở nền
       })
       .catch(fail);
   }, [fail]);
@@ -323,7 +355,8 @@ export default function App() {
           {view === "new" && <Triage jobs={jobs.filter((j) => j.status === "new")} move={move} undo={undo} />}
           {view !== "new" && BINS.some((b) => b.id === view) && (
             <BinList bin={view} jobs={jobs.filter((j) => inBin(j, view))} move={move}
-              rules={conf.rules} sort={sort} setSort={setSort} />
+              rules={conf.rules} sort={sort} setSort={setSort}
+              enrich={enrich} startEnrich={startEnrich} exportJd={exportJd} />
           )}
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
           {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
@@ -422,11 +455,12 @@ function Key({ n, label, sub, tone, onClick }) {
 }
 
 /* ========================= BIN LIST ========================= */
-function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
+function BinList({ bin, jobs: unsorted, move, rules, sort, setSort, enrich, startEnrich, exportJd }) {
   const all = useMemo(() => sortJobs(unsorted, sort), [unsorted, sort]);
   const meta = BINS.find((b) => b.id === bin);
   const ruleName = (id) => (rules.find((r) => r.id === id) || {}).label || "luật không rõ";
   const [srcFilter, setSrcFilter] = useState("");
+  const [tab, setTab] = useState("on"); // chỉ Hàng đọc
 
   const allSrc = useMemo(() => {
     const s = new Set();
@@ -434,11 +468,24 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
     return [...s].sort();
   }, [all]);
 
-  const jobs = srcFilter ? all.filter((j) => channels(j).includes(srcFilter)) : all;
+  /* Hàng đọc chia tab (bước 5). fitTab() trong fit.js là chỗ duy nhất xếp tin vào tab; Dead do hệ thống tính. */
+  const isQueue = bin === "queue";
+  const fitOpts = { cvHash: enrich?.cvHash ?? null, today: today() };
+  const tabCounts = useMemo(() => (isQueue ? fitCounts(all, fitOpts) : null), [isQueue, all, enrich?.cvHash]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const bySrc = srcFilter ? all.filter((j) => channels(j).includes(srcFilter)) : all;
+  const jobs = isQueue ? bySrc.filter((j) => fitTab(j, fitOpts) === tab) : bySrc;
 
   if (!all.length) return <Empty title={`${meta.label} trống`} body="Chưa có tin nào ở đây." />;
 
-  const capped = bin === "queue";
+  const capped = isQueue && tab === "on";
+
+  const killOff = () => {
+    const off = all.filter((j) => fitTab(j, fitOpts) === "off");
+    if (!off.length) return;
+    if (!window.confirm(`Loại ${off.length} tin off-profile? Đây là ${off.length} quyết định của mày, mỗi tin hoàn tác được bằng U.`)) return;
+    for (const j of off) move(j.id, "killed");
+  };
 
   return (
     <div className="list">
@@ -461,12 +508,37 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
           ))}
         </div>
       )}
+      {isQueue && (
+        <div className="fitHead">
+          <div className="filterRow">
+            {FIT_TABS.map((t) => (
+              <button key={t.id} className={"chipBtn" + (tab === t.id ? " on" : "")} onClick={() => setTab(t.id)}>
+                {t.label} <span className="n">{tabCounts[t.id]}</span>
+              </button>
+            ))}
+          </div>
+          <div className="fitRun">
+            <button className="ghost" onClick={startEnrich} disabled={!!enrich?.running || !!enrich?.cvError}>
+              {enrich?.running ? "Đang phân tích…" : "Phân tích lại"}
+            </button>
+            <span className="dim small">
+              {!enrich ? "" : enrich.cvError ? enrich.cvError
+                : enrich.running ? `${enrich.results?.length ?? 0} tin xong trong lượt này`
+                : enrich.pending ? `${enrich.pending} tin chờ phân tích (tối đa 20 một lượt)`
+                : "mọi tin ở Hàng đọc đã phân tích với CV hiện tại"}
+            </span>
+            {tab === "off" && tabCounts.off > 0 && <button className="off" onClick={killOff}>Loại tất cả off-profile</button>}
+          </div>
+          {enrich?.error && <p className="err">Lượt phân tích gần nhất hỏng: {enrich.error}</p>}
+        </div>
+      )}
       {capped && (
         <p className="advice">
           Đọc tối đa 10 tin mỗi buổi, và đọc ở <b>block đầu tiên</b> lúc còn tỉnh. Hết 10 thì dừng —
           phần còn lại vẫn nằm đây, không mất.
         </p>
       )}
+      {isQueue && !jobs.length && <p className="dim small">Không có tin ở tab này.</p>}
       {jobs.map((j, idx) => (
         <div key={j.id} className={"row" + (capped && idx === 10 ? " cut" : "")}>
           <div className="rowMain">
@@ -486,10 +558,12 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
               {j.killedBy && <span className="tagRule">luật: {ruleName(j.killedBy)}</span>}
               {j.url && <a href={j.url} target="_blank" rel="noreferrer">tin gốc</a>}
             </div>
+            {isQueue && <FitInfo j={j} tab={fitTab(j, fitOpts)} />}
           </div>
           <div className="rowActs">
             {bin !== "queue" && <button onClick={() => move(j.id, "queue")}>Đưa vào Hàng đọc</button>}
             {bin === "queue" && <button className="go" onClick={() => move(j.id, "applied")}>Đã nộp</button>}
+            {bin === "queue" && j.jdSource !== "title_only" && <button onClick={() => exportJd(j.id)}>Xuất JD</button>}
             {bin === "applied" && <button className="go" onClick={() => move(j.id, "applied", "interview")}>Phỏng vấn</button>}
             {bin === "interview" && <button className="go" onClick={() => move(j.id, "applied", "offer")}>Offer</button>}
             {["applied", "interview", "offer"].includes(bin) && <button onClick={() => move(j.id, "applied", "rejected")}>Từ chối</button>}
@@ -499,6 +573,33 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort }) {
         </div>
       ))}
       {capped && jobs.length > 10 && <div className="cutNote">Dưới vạch này để buổi sau.</div>}
+    </div>
+  );
+}
+
+/* Nhãn fit của một tin ở Hàng đọc: chip lý do, gaps, strengths. Không có mô tả công việc — đó là nút Xuất JD. */
+function FitInfo({ j, tab }) {
+  const f = j.fit;
+  const chips = [];
+  if (tab === "dead" && [404, 410].includes(j.jdHttpStatus)) chips.push(<span key="404" className="chip closed">link chết ({j.jdHttpStatus})</span>);
+  if (tab === "pending" && f) chips.push(<span key="cv" className="chip pend">CV đã đổi, chờ phân tích lại</span>);
+  if (f) {
+    if (f.fit === "off" && REASON_LABEL[f.reason]) chips.push(<span key="r" className="chip offp">{REASON_LABEL[f.reason]}</span>);
+    if (f.confidence === "low") chips.push(<span key="c" className="chip low">độ tin cậy thấp</span>);
+    if (j.jdSource === "title_only") chips.push(<span key="jd" className="chip low">không lấy được JD</span>);
+    if (f.years_required != null) chips.push(<span key="y" className="chip">{f.years_required}+ năm</span>);
+    if (f.finnish_required) chips.push(<span key="fi" className="tagFi">cần tiếng Phần Lan</span>);
+  }
+  if (!chips.length && !f) return null;
+  return (
+    <div className="fitInfo">
+      {chips.length > 0 && <div className="rowMeta">{chips}</div>}
+      {f && (f.strengths?.length > 0 || f.gaps?.length > 0) && (
+        <div className="fitLines">
+          {(f.strengths || []).map((s, i) => <div key={"s" + i} className="fitLine good"><span className="k">+</span><span>{s}</span></div>)}
+          {(f.gaps || []).map((s, i) => <div key={"g" + i} className="fitLine gap"><span className="k">−</span><span>{s}</span></div>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1168,6 +1269,20 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .tagDl{background:#DDE6EE;color:var(--signal);padding:1px 6px;border-radius:3px}
 .tagDl.past{background:#EADADA;color:#7A2E2E}
 .tagDays{color:var(--signal);font-variant-numeric:tabular-nums}
+.fitHead{display:flex;flex-direction:column;gap:8px}
+.fitRun{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.fitRun .ghost{align-self:center}
+.fitRun .off{color:#7A2E2E;border-color:#D8C4C4}
+.chipBtn .n{opacity:.7;font-variant-numeric:tabular-nums;margin-left:2px}
+.chip.offp{background:#F2E4D6;color:#7A4A1E}
+.chip.low{background:#E6E8EA;color:#5A6670}
+.chip.pend{background:#FBF3E4;color:#8A5A12}
+.fitInfo{margin-top:4px}
+.fitLines{margin-top:5px;font-size:13px;line-height:1.45;color:#3E4952;max-width:78ch}
+.fitLine{display:flex;gap:8px}
+.fitLine .k{width:10px;flex:none;font-weight:600}
+.fitLine.good .k{color:#2C5A36}
+.fitLine.gap .k{color:#7A4A1E}
 .pill.reply{background:#DDE1E4;color:#3E4952}
 .pill.reply.interview,.pill.reply.assessment{background:#DDE6EE;color:var(--signal)}
 .pill.reply.rejection{background:#F3DEDA;color:#9A2C1E}

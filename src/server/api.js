@@ -9,6 +9,7 @@ import * as config from "../core/config.js";
 import { listPending } from "../core/replies.js";
 import { manualSource } from "../ingest/normalize.js";
 import { createPuller, loadEnv } from "../ingest/pull.js";
+import { createEnricher, enrichConfigured, exportJd } from "../ingest/enrich.js";
 import { detectAts } from "../ingest/detect-ats.js";
 
 /* Route mỏng: không có SQL ở đây, mọi thứ đi qua core/. Không có route xóa. */
@@ -23,6 +24,8 @@ const backups = createBackups(db, path.join(DATA, "backups"));
 backups.runIfStale(); // sao lưu trước khi phục vụ
 loadEnv(); // IMAP + ANTHROPIC_API_KEY từ .env, trước khi tạo puller
 const puller = createPuller(db);
+const enricher = createEnricher(db); // bước 5: phân tích fit, chạy nền như puller
+const JD_DIR = process.env.JD_EXPORT_DIR || path.join(ROOT, "jd");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -47,10 +50,24 @@ app.post("/api/ingest", (req, res) => {
   const { source, items } = req.body ?? {};
   res.json(jobs.ingest(db, items, manualSource(source)));
 });
-app.post("/api/jobs/:id/status", (req, res) =>
-  res.json({ job: jobs.decide(db, req.params.id, req.body?.status, req.body?.outcome ?? null), canUndo: jobs.canUndo(db) }));
+app.post("/api/jobs/:id/status", (req, res) => {
+  const job = jobs.decide(db, req.params.id, req.body?.status, req.body?.outcome ?? null);
+  // Tin vào Hàng đọc (phím 1) → phân tích fit ở nền. Chưa cấu hình key thì thôi, không lỗi.
+  if (job.status === "queue" && enrichConfigured()) enricher.start();
+  res.json({ job, canUndo: jobs.canUndo(db), enrich: enricher.status() });
+});
 app.post("/api/undo", (req, res) => res.json({ ...jobs.undo(db), canUndo: jobs.canUndo(db) }));
 app.post("/api/archive-stale", (req, res) => res.json(jobs.archiveStale(db)));
+
+/* ---------- phân tích fit (bước 5): chạy nền, trả về ngay; UI hỏi GET /api/enrich tới khi xong. Claude chỉ gắn nhãn ---------- */
+app.get("/api/enrich", (req, res) => res.json(enricher.status()));
+app.post("/api/enrich", (req, res) => res.status(202).json(enricher.start()));
+// Xuất JD ra file để đọc ngoài app — từng tin, người bấm. Không có route trả description về UI.
+app.post("/api/jobs/:id/export-jd", (req, res) => {
+  const jd = jobs.readJd(db, req.params.id);
+  if (!jd) return res.status(404).json({ error: "không có tin này" });
+  res.json({ file: exportJd(jd, JD_DIR) });
+});
 
 /* ---------- phản hồi (bước 3b): đề xuất của Claude, người Xác nhận / Sai. Xác nhận là đường duy nhất replies đụng jobs ---------- */
 app.get("/api/replies", (req, res) => res.json(listPending(db)));

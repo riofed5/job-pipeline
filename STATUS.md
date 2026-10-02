@@ -9,7 +9,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 3 | `imap.js` + parser bằng Claude | **Xong**, đã kéo thật 11 mail LinkedIn | 2026-09-17 |
 | 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp · `replies.js` · tab Phản hồi + aliases | **Xong**, chưa kéo thật qua Claude | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
-| 5 | `enrich.js` + tab fit trong Hàng đọc | **Đang làm**: lõi + kiểm xong (1/2), API + UI còn lại | 2026-10-02 |
+| 5 | `enrich.js` + tab fit trong Hàng đọc + Xuất JD | **Xong**, đã gọi thật 1 tin (Trimble) để kiểm request | 2026-10-02 |
 | 6 | Cron + bảng theo dõi | Chưa | |
 
 ## Bước 2 + 3 có gì
@@ -28,7 +28,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Ashby**: feed trả cả tin `isListed: false` (tin đã gỡ, kể cả "Unlisted TEST job"); parser bỏ chúng nên `closed_at` bắt được.
 - **Luật mẫu thêm sau bước 1** (seed cho DB mới, migration cho DB đang dùng): `r_abroad` — location chứa `us, gb, uk, pl, de, se, dk, ca, india, norway` → loại (không dùng `in`, `no` vì trùng từ tiếng Anh); `r_openapp` — title chứa `open application, avoin hakemus, general application, spontaneous application` → Ngờ vực; `r_otherlang` — title chứa `german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare` → Ngờ vực (dấu * vì tiếng Đức/Thụy Điển ghép từ). Luật loại thắng luật Ngờ vực khi cả hai khớp.
 - **`jobs.deadline`**: cột có, để trống tới bước 5. Mỗi thùng có nút xếp: mới thêm (mặc định) / cũ nhất / deadline gần nhất, trống xếp cuối. Hộp đến và Rà soát không có nút xếp.
-- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 80 kịch bản. Schema v14.
+- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 81 kịch bản. Schema v14.
 
 ## Bước 3b có gì (1/3 — sau khi nộp)
 
@@ -62,7 +62,13 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Lượt chạy** `createEnricher(db)`: như `createPuller` — `start()` trả về ngay, `status()` cho UI hỏi, không timer. Mỗi lượt lấy tin `status = 'queue'` chưa có fit hoặc hash lệch, mới thêm trước, **trần 20**. `status()` trả `cvHash`, `cvError`, `pending`.
 - **Dead do hệ thống** (`src/ui/fit.js`, thuần): `closedAt`, hoặc `deadline < hôm nay`, hoặc `jdHttpStatus` 404/410. `fitTab()`: Dead > Chưa phân tích > Off-profile > On-profile, mỗi tin đúng một tab; chưa có CV thì fit cũ vẫn hiện.
 - **Không đổi trạng thái**: `enrich.js` chỉ gọi `jobs.pendingFit / countPendingFit / setJd / setFit` (có lệnh quét canh); kịch bản kiểm so `jobs.status/outcome/decided_by` + `events` trước và sau từng byte qua ba lượt chạy và một lần đổi CV. 12 kịch bản mới.
-- Chưa nối: API, nút Phân tích lại, kích hoạt khi bấm 1, tab trong Hàng đọc, nút Xuất JD — commit 2.
+
+## Bước 5 có gì (2/2 — API + Hàng đọc)
+
+- **API**: `GET /api/enrich` (trạng thái lượt chạy + `cvHash`, `cvError`, `pending`), `POST /api/enrich` (bắt đầu, 202, chạy nền). `POST /api/jobs/:id/status` sang `queue` → server tự `start()` nếu có `ANTHROPIC_API_KEY`, trả thêm `enrich` để UI bắt đầu hỏi. `POST /api/jobs/:id/export-jd` ghi `jd/<company>-<title>.md` (title, company, url, mô tả) vào `JD_EXPORT_DIR` (mặc định `jd/` trong repo, gitignore); tin không có JD → 400. Không có route nào trả description về UI.
+- **Hàng đọc**: bốn tab On-profile / Off-profile / Dead / Chưa phân tích, đếm số, `fitTab()` trong `src/ui/fit.js` xếp. Giới hạn 10 tin một buổi chỉ áp cho On-profile. Mỗi tin: chip lý do (off), `độ tin cậy thấp`, `không lấy được JD`, `N+ năm`, `cần tiếng Phần Lan`, `link chết (404)`, `CV đã đổi`; dưới đó strengths (+) rồi gaps (−). Không hiện JD. Nút **Phân tích lại** (khóa khi đang chạy hoặc thiếu CV) kèm dòng "N tin chờ (tối đa 20 một lượt)"; UI hỏi mỗi 2 giây khi đang chạy, xong thì toast `N on-profile · N off-profile · N không lấy được JD · N lỗi`. Tab Off-profile có **Loại tất cả off-profile** → `confirm` nêu số tin → `decide(id, 'killed')` từng tin (quyết định của người, U hoàn tác từng tin). Nút **Xuất JD** trên từng tin (ẩn khi `title_only`).
+- **Đã gọi thật 1 lần** (Trimble Frontend Developer, JD fetch từ LinkedIn, CV thật): 9 giây, 2.890 token vào + 4.280 token CV ghi cache + 329 token ra, ≈ $0.10. Trả `fit: on`, 3 gaps, 2 strengths, `years_required: 3`. Chưa chạy lượt 20 tin thật — bấm Phân tích lại ở Hàng đọc (8 tin chờ, ≈ $1).
+- Server đang chạy từ trước bước 5 phải khởi động lại (`npm run ui`) mới có route `/api/enrich`; UI mở sẵn sẽ báo "Không kết nối được server" tới lúc đó.
 
 ## Còn mở
 

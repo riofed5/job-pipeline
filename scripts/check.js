@@ -22,8 +22,8 @@ import { mailKey, mailText, mailChannel, sourceFor, extractJobs, createImapStep,
 import * as R from "../src/core/replies.js";
 import { searchQuery, fetchCompanyMails, assessReplies, buildRepliesRequest, createRepliesStep, repliesConfig } from "../src/ingest/replies.js";
 import { exportAll } from "../src/core/db.js";
-import { fetchJd, jdFromHtml, normalizeFit, buildFitRequest, assessFit, createEnricher, cvHashOf, loadCv, summarizeFit, MAX_JD_CHARS } from "../src/ingest/enrich.js";
-import { fitTab, fitCounts, isDead } from "../src/ui/fit.js";
+import { fetchJd, jdFromHtml, normalizeFit, buildFitRequest, assessFit, createEnricher, cvHashOf, loadCv, exportJd, slug, MAX_JD_CHARS } from "../src/ingest/enrich.js";
+import { fitTab, fitCounts, isDead, summarizeFit } from "../src/ui/fit.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -1675,6 +1675,24 @@ check("enrich.js không gọi decide/writeStatus/confirmReply; chỉ ghi qua job
   const calls = [...src.matchAll(/\bjobs\.(\w+)\(/g)].map((m) => m[1]);
   eq([...new Set(calls)].sort(), ["countPendingFit", "pendingFit", "setFit", "setJd"], "chỉ bốn hàm đọc/ghi fit");
   ok(!/^\s*import\b/m.test(fs.readFileSync(path.join(ROOT, "src/ui/fit.js"), "utf8")), "fit.js thuần");
+});
+
+check("xuất JD: readJd trả description cho đúng một tin; file jd/<company>-<title>.md có title, company, url, mô tả; không JD → 400; slug bỏ dấu", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Ohjelmistokehittäjä / Full-Stack", "Fräntilä & Co", { url: "https://x/1", description: "Mô tả dài" });
+  const b = add(db, "No JD", "Wolt");
+  eq(slug("Fräntilä & Co"), "frantila-co", "slug");
+  eq(J.readJd(db, a.id).description, "Mô tả dài", "readJd");
+  eq(J.readJd(db, "nope"), null, "không có tin");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jd-"));
+  const file = exportJd(J.readJd(db, a.id), dir);
+  eq(path.basename(file), "frantila-co-ohjelmistokehittaja-full-stack.md", "tên file");
+  const txt = fs.readFileSync(file, "utf8");
+  ok(txt.startsWith("# Ohjelmistokehittäjä / Full-Stack\n\nFräntilä & Co\n\nhttps://x/1\n") && txt.includes("Mô tả dài"), "nội dung");
+  let err; try { exportJd(J.readJd(db, b.id), dir); } catch (e) { err = e; }
+  eq(err?.status, 400, "không JD → 400");
+  fs.rmSync(dir, { recursive: true, force: true });
+  ok(!("description" in J.listJobs(db)[0]), "danh sách vẫn không có description");
 });
 
 console.log(failed ? `\n${failed} FAIL` : "\nTất cả PASS");

@@ -38,3 +38,14 @@ export function fitCounts(jobs, opts) {
   for (const j of jobs) m[fitTab(j, opts)]++;
   return m;
 }
+
+/* Tóm tắt một lượt phân tích cho toast. */
+export function summarizeFit(results) {
+  const n = (f) => results.filter(f).length;
+  const parts = [`${n((r) => r.fit?.fit === "on")} on-profile`, `${n((r) => r.fit?.fit === "off")} off-profile`];
+  const titleOnly = n((r) => r.jdSource === "title_only");
+  if (titleOnly) parts.push(`${titleOnly} không lấy được JD`);
+  const errors = n((r) => r.error);
+  if (errors) parts.push(`${errors} lỗi`);
+  return parts.join(" · ");
+}

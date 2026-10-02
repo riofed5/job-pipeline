@@ -352,6 +352,12 @@ export function pendingFit(db, cvHash, limit = 20) {
     .map((r) => ({ id: r.id, title: r.title, company: r.company, location: r.location, url: r.url, description: r.description, jdSource: r.jd_source, deadline: r.deadline }));
 }
 
+/* Một tin kèm description, cho nút Xuất JD (ghi ra file ngoài app, đọc ở chỗ khác). Không ra danh sách. */
+export function readJd(db, id) {
+  const r = stmt(db, "SELECT id, title, company, url, description, jd_source FROM jobs WHERE id = ?").get(id);
+  return r ? { id: r.id, title: r.title, company: r.company, url: r.url, description: r.description, jdSource: r.jd_source } : null;
+}
+
 export const countPendingFit = (db, cvHash) =>
   stmt(db, "SELECT COUNT(*) n FROM jobs WHERE status = 'queue' AND (fit_json IS NULL OR fit_cv_hash IS NOT ?)").get(cvHash).n;
 

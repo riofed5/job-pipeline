@@ -50,6 +50,10 @@ export const api = {
   patchSource: (id, patch) => send("PATCH", `/api/sources/${encodeURIComponent(id)}`, patch),
   sweep: () => send("POST", "/api/sweep"),
 
+  enrich: () => send("POST", "/api/enrich"),
+  enrichStatus: () => send("GET", "/api/enrich"),
+  exportJd: (id) => send("POST", `/api/jobs/${encodeURIComponent(id)}/export-jd`),
+
   pull: () => send("POST", "/api/pull"),
   pullIfStale: () => send("POST", "/api/pull/if-stale"),
   pullStatus: () => send("GET", "/api/pull"),

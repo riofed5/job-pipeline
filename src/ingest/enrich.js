@@ -300,13 +300,17 @@ export function createEnricher(db, { env = process.env, fetchJd: getJd = fetchJd
   return { start, status, wait };
 }
 
-/* Tóm tắt một lượt cho toast và CLI. Thuần. */
-export function summarizeFit(results) {
-  const n = (f) => results.filter(f).length;
-  const parts = [`${n((r) => r.fit?.fit === "on")} on-profile`, `${n((r) => r.fit?.fit === "off")} off-profile`];
-  const titleOnly = n((r) => r.jdSource === "title_only");
-  if (titleOnly) parts.push(`${titleOnly} không lấy được JD`);
-  const errors = n((r) => r.error);
-  if (errors) parts.push(`${errors} lỗi`);
-  return parts.join(" · ");
+/* ---------------------------- xuất JD ----------------------------
+   Nút "Xuất JD": ghi jd/<company>-<title>.md để đọc ngoài app (thư mục JD_EXPORT_DIR). Đây là đường DUY NHẤT
+   description rời app ra ngoài, và là việc đắt — người bấm từng tin, không có xuất hàng loạt. */
+
+export const slug = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "x";
+
+export function exportJd({ title, company, url, description }, dir) {
+  if (!description) throw Object.assign(new Error("tin này chưa có JD — chưa phân tích, hoặc không lấy được mô tả"), { status: 400 });
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${slug(company)}-${slug(title)}.md`);
+  fs.writeFileSync(file, `# ${title}\n\n${company}\n\n${url ?? ""}\n\n---\n\n${description}\n`);
+  return file;
 }
