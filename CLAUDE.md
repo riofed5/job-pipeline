@@ -8,7 +8,7 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 ## BƯỚC HIỆN TẠI: 5 — phân tích fit
 
 **Chỉ được làm:** profile/cv.md, lấy JD, enrich.js, cột jobs.fit_json,
-Dead do hệ thống tính, tab trong Hàng đọc, nút Phân tích lại.
+Dead do hệ thống tính, tab trong Hàng đọc, nút Phân tích lại, nút Xuất JD.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
@@ -57,8 +57,8 @@ Con số ở dòng tiêu đề trên là cổng chặn duy nhất. Nó chỉ đ�
 
 - **Không có chức năng tự động nộp đơn.** Sẽ có lúc trông hợp lý. Không.
 - **Không để LLM tự đổi trạng thái tin.** Nó tóm tắt, nó gợi ý. Quyết định là của người.
-- Không scrape LinkedIn. Nó chặn gắt và có thể làm khóa tài khoản. LinkedIn đi qua
-  email alert ở bước 3.
+- Không crawl LinkedIn, không dùng tài khoản LinkedIn. Fetch một trang tin
+  công khai linkedin.com/jobs/view/ thì được.
 
 ## Bối cảnh
 
