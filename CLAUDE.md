@@ -5,17 +5,18 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 
 ---
 
-## BƯỚC HIỆN TẠI: 3b — phản hồi
+## BƯỚC HIỆN TẠI: 5 — phân tích fit
 
-**Chỉ được làm:** cột jobs.outcome sau applied, replies.js, tab Phản hồi,
-companies.aliases, thùng Phỏng vấn / Từ chối / Offer trên rail.
+**Chỉ được làm:** profile/cv.md, lấy JD, enrich.js, cột jobs.fit_json,
+Dead do hệ thống tính, tab trong Hàng đọc, nút Phân tích lại.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
-- `enrich.js`, `websearch.js`, `tmt.js`
+- `websearch.js`, `tmt.js`
 - cron, scheduler, background job có timer
 - Docker, CI, deploy
 - CHECK của jobs.status — không nới, không DROP TABLE, không tắt FK
+- enrich.js không được đổi status hay outcome của bất kỳ tin nào
 
 Nếu thấy một trong số đó cần thiết, **nói ra và dừng lại**. Đừng tự làm.
 
