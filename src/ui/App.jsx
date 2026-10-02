@@ -1154,7 +1154,9 @@ const CSS = `
 font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 color:var(--ink);background:var(--bg);min-height:100vh;font-size:15px;line-height:1.5}
 .jh *{box-sizing:border-box}
-.jh button,.jh input,.jh select,.jh textarea{font:inherit;color:inherit}
+/* :where() để dòng này có độ ưu tiên 0: nếu không, ".jh button" (1 class + 1 thẻ) đè color của mọi nút chỉ có một
+   class (.primary, .ghost, .chipBtn, .linkBtn, .sweepBtn) — nút đen chữ đen. Nút không đặt màu vẫn kế thừa. */
+:where(.jh) :where(button,input,select,textarea){font:inherit;color:inherit}
 .jh :focus-visible{outline:2px solid var(--signal);outline-offset:2px}
 .jh a{color:var(--signal);text-decoration:none}
 .jh a:hover{text-decoration:underline}
