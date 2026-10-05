@@ -5,10 +5,10 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 
 ---
 
-## BƯỚC HIỆN TẠI: 5 — phân tích fit
+## BƯỚC HIỆN TẠI: 5b — người quen và nhật ký
 
-**Chỉ được làm:** profile/cv.md, lấy JD, enrich.js, cột jobs.fit_json,
-Dead do hệ thống tính, tab trong Hàng đọc, nút Phân tích lại, nút Xuất JD.
+**Chỉ được làm:** bảng people, tab Người, tab Nhật ký (tiến độ input +
+ghi chú hồ sơ), bảng weekly_log, cột events.note và events.gut.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
@@ -16,7 +16,7 @@ Những thứ **KHÔNG được đụng vào** ở bước này:
 - cron, scheduler, background job có timer
 - Docker, CI, deploy
 - CHECK của jobs.status — không nới, không DROP TABLE, không tắt FK
-- enrich.js không được đổi status hay outcome của bất kỳ tin nào
+- enrich.js, replies.js — không sửa
 
 Nếu thấy một trong số đó cần thiết, **nói ra và dừng lại**. Đừng tự làm.
 
