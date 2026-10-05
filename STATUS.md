@@ -10,7 +10,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp · `replies.js` · tab Phản hồi + aliases | **Xong**, chưa kéo thật qua Claude | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
 | 5 | `enrich.js` + tab fit trong Hàng đọc + Xuất JD | **Xong**, đã gọi thật 1 tin (Trimble) để kiểm request | 2026-10-02 |
-| 5b | Người quen (`people`) + Nhật ký (tiến độ tuần, ghi chú hồ sơ, gut) | **Lõi xong** (1/2), UI chưa | 2026-10-05 |
+| 5b | Người quen (`people`) + Nhật ký (tiến độ tuần, ghi chú hồ sơ, gut) | **Xong**, chưa dùng thật | 2026-10-05 |
 | 6 | Cron + bảng theo dõi | Chưa | |
 
 ## Bước 2 + 3 có gì
@@ -86,6 +86,14 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
   - `journalEntries`: event có note hoặc gut, mới nhất trước, kèm title/company/thùng hiện tại, không có mô tả công việc. `gutTable`: gut của lần nộp gần nhất × kết quả hiện tại (chờ / phỏng vấn+offer / từ chối), tin đã rời applied không tính; dưới 10 hồ sơ trả `rows = null` kèm `sample`.
 - **API**: `GET/POST /api/people`, `PATCH /api/people/:id`, `GET /api/journal` (weeks, funnel, entries, gut), `PUT /api/journal/:week` ({prep, prepNote}), `PATCH /api/settings` (chỉ targetApps, targetPrep, số nguyên ≥ 0). `POST /api/jobs/:id/status` nhận thêm `note`, `gut`. `ui/api.js` đã có hàm gọi; tab UI ở commit sau.
 - Kiểm: 7 kịch bản mới (90 tổng); 22 lệnh `decide(..., "applied")` cũ thêm `{ gut: 3 }`. Đã chạy migration + API trên bản sao DB thật ở server riêng (cổng 5199).
+
+## Bước 5b có gì (2/2 — UI)
+
+- **Rail**: thêm **Người** (badge = số chưa nhắn) và **Nhật ký** vào nhóm Công cụ. `reload()` đọc thêm `/api/people`, `/api/journal`; nộp / đổi outcome / hoàn tác / đổi chip người thì đọc lại nhật ký.
+- **Tab Người**: dòng thêm (tên, công ty, quan hệ, kênh; Enter để thêm). Mỗi người một row: hạng công ty khi khớp bảng companies, chip quan hệ, ô ngày nhắn (`type=date`, sửa/xóa được), ghi chú inline, bốn chip trạng thái chưa nhắn → đã nhắn → đã trả lời → đã giới thiệu. Không có nút xóa. Tab Công ty hiện "N người quen" theo `norm(name)`.
+- **Tab Nhật ký**: bảng tuần ISO (tuần này tô đậm, trên cùng): hồ sơ on-profile `n / mục tiêu` (xanh khi đạt), tin nhắn (tuần này kèm "còn N chưa nhắn"), rep `ô số / mục tiêu` + ô "rep gì" (lưu khi rời ô hoặc Enter; ô trống = chưa nhập, không phải 0). Dưới bảng: hai ô mục tiêu (hồ sơ, rep; tin nhắn = hết danh sách) → `PATCH /api/settings`. Ba số: hồi âm trong 3 ngày (kèm n/pool), ngày trung bình tới từ chối, phỏng vấn trên on-profile. Bảng linh cảm × kết quả chỉ hiện từ 10 hồ sơ, trước đó ghi "hiện có N". Danh sách ghi chú hồ sơ mới nhất trước: tin, bước (Đã nộp / Phỏng vấn / Offer / Từ chối), linh cảm, giờ, thùng hiện tại, note. Không có mô tả công việc.
+- **Nút Đã nộp** ở Hàng đọc mở panel inline: 5 chip linh cảm "sẽ được gọi phỏng vấn?" (1 chắc không · 5 chắc có), ô ghi chú tùy chọn, **Xác nhận khóa tới khi chọn chip**, Enter = Xác nhận, Esc/hủy đóng. **Phỏng vấn / Offer / Từ chối** mở ô ghi chú tùy chọn + Xác nhận (Enter để bỏ qua) — tốn thêm một bấm vì event ghi xong không gắn note vào được.
+- **Đã mở app thật** trên server riêng (cổng 5199, `DATA_DIR` bản sao), lái bằng Chrome headless qua CDP: thêm người, đổi chip (ngày tự điền), Nhật ký 4 tuần + ba số, nộp với linh cảm 4 + note, Từ chối kèm note, hai dòng ghi chú hiện đúng, Hoàn tác, Công ty hiện "2 người quen", ô rep / ghi chú rep / mục tiêu còn sau reload. Console không lỗi, không cảnh báo. Server chính chưa khởi động lại — phải `npm run ui` lại mới có bước 5b; UI cũ sau đó sẽ không nộp được nếu không chọn linh cảm (server 400), tải lại trang là có panel.
 
 ## Còn mở
 

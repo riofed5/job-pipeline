@@ -35,6 +35,14 @@ const AFTER_APPLIED = ["applied", "interview", "offer", "rejected"];
 const REPLY_LABEL = { no_reply: "chưa phản hồi", ack: "đã nhận hồ sơ", rejection: "từ chối", interview: "mời phỏng vấn", assessment: "bài kiểm tra", other: "khác" };
 const REPLY_EFFECT = { rejection: "Xác nhận → thùng Từ chối", interview: "Xác nhận → thùng Phỏng vấn", assessment: "Xác nhận → thùng Phỏng vấn" };
 
+/* Người quen (bước 5b): nhãn quan hệ và trạng thái. Trạng thái chỉ đổi, không xóa. */
+const RELATIONS = [["colleague", "đồng nghiệp cũ"], ["alumni", "cùng trường"], ["community", "cộng đồng"], ["other", "khác"]];
+const RELATION_LABEL = Object.fromEntries(RELATIONS);
+const PEOPLE_STATUSES = [["todo", "chưa nhắn"], ["sent", "đã nhắn"], ["replied", "đã trả lời"], ["referral", "đã giới thiệu"]];
+const PEOPLE_LABEL = Object.fromEntries(PEOPLE_STATUSES);
+/* Linh cảm lúc nộp: 1 = chắc không, 5 = chắc có. Bắt buộc, để sau 10 hồ sơ so với kết quả thật ở Nhật ký. */
+const GUTS = [1, 2, 3, 4, 5];
+
 const channels = (j) => j.channels || [];
 /* Chỉ thấy ở trang tuyển dụng của công ty = tin chưa lên board = ít cạnh tranh hơn. */
 const isEarly = (j) => { const c = channels(j); return c.length === 1 && c[0] === "Trang công ty"; };
@@ -59,6 +67,8 @@ const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("sv-SE", { dateStyl
 export default function App() {
   const [jobs, setJobs] = useState([]);
   const [replies, setReplies] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [journal, setJournal] = useState(null); // bước 5b: tiến độ tuần + ghi chú hồ sơ, đọc lại sau mỗi lần nộp/đổi outcome
   const [conf, setConf] = useState(null);
   const [view, setView] = useState("new");
   const [ready, setReady] = useState(false);
@@ -69,11 +79,13 @@ export default function App() {
   const [sort, setSort] = useState("newest"); // dùng chung cho mọi thùng, đổi thùng không mất
 
   const reload = useCallback(async () => {
-    const [j, rules, companies, sources, settings, pending, killStats] = await Promise.all([
-      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(), api.replies(), api.killStats(),
+    const [j, rules, companies, sources, settings, pending, killStats, ppl, jr] = await Promise.all([
+      api.jobs(), api.rules(), api.companies(), api.sources(), api.settings(), api.replies(), api.killStats(), api.people(), api.journal(),
     ]);
     setJobs(j);
     setReplies(pending);
+    setPeople(ppl);
+    setJournal(jr);
     setConf({ rules, companies, sources, killStats, ...settings });
     return settings;
   }, []);
@@ -187,7 +199,8 @@ export default function App() {
 
   /* ---------- actions ---------- */
   /* extra = { reason, reasonText, reasonSource } khi loại qua picker (human) hoặc Loại tất cả off-profile (model).
-     Phím 4 ở Hộp đến và nút Loại ở thùng khác không gửi gì — không hỏi lý do. */
+     Phím 4 ở Hộp đến và nút Loại ở thùng khác không gửi gì — không hỏi lý do.
+     extra = { gut, note } khi bấm Đã nộp (gut bắt buộc, server từ chối nếu thiếu), { note } khi Phỏng vấn / Từ chối / Offer. */
   const move = useCallback((id, status, outcome = null, extra = {}) => {
     setJobs((js) => js.map((x) => (x.id === id ? { ...x, status, outcome: status === "applied" ? outcome : null, decidedBy: "human" } : x)));
     api.decide(id, status, outcome, extra)
@@ -196,6 +209,7 @@ export default function App() {
         setConf((c) => ({ ...c, canUndo }));
         if (e) setEnrich(e); // tin vào Hàng đọc → server đã bắt đầu phân tích ở nền
         if (status === "killed") api.killStats().then((killStats) => setConf((c) => ({ ...c, killStats }))).catch(() => {});
+        if (status === "applied") api.journal().then(setJournal).catch(() => {});
       })
       .catch(fail);
   }, [fail]);
@@ -206,6 +220,7 @@ export default function App() {
         setConf((c) => ({ ...c, canUndo: r.canUndo }));
         if (r.nothing) { setToast("Không còn gì để hoàn tác"); return; }
         setJobs((js) => js.map((x) => (x.id === r.job.id ? r.job : x)));
+        api.journal().then(setJournal).catch(() => {});
         const bin = binOf(r.job);
         const why = r.ruleOff ? " (luật cũ đã tắt)" : "";
         setToast(`Đã hoàn tác: ${r.job.title} · ${r.job.company} → ${bin ? bin.label : r.job.status}${why}`);
@@ -303,6 +318,34 @@ export default function App() {
     api.patchSource(id, { alert }).catch(fail);
   }, [fail]);
 
+  /* ---------- người quen + nhật ký (bước 5b) ---------- */
+  const addPerson = useCallback((p) => {
+    api.addPerson(p).then((person) => setPeople((ps) => [person, ...ps])).catch(fail);
+  }, [fail]);
+
+  const patchPerson = useCallback((id, patch) => {
+    setPeople((ps) => ps.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    api.patchPerson(id, patch)
+      .then((person) => {
+        setPeople((ps) => ps.map((x) => (x.id === id ? person : x)));
+        // Đổi trạng thái / ngày liên hệ là con số "tin nhắn đã gửi" ở Nhật ký.
+        if ("status" in patch || "contactedAt" in patch) api.journal().then(setJournal).catch(() => {});
+      })
+      .catch(fail);
+  }, [fail]);
+
+  const setWeeklyLog = useCallback((week, body) => {
+    api.setWeeklyLog(week, body)
+      .then((r) => setJournal((j) => j && { ...j, weeks: j.weeks.map((w) => (w.week === week ? { ...w, prep: r.prep, prepNote: r.prepNote } : w)) }))
+      .catch(fail);
+  }, [fail]);
+
+  const patchSettings = useCallback((patch) => {
+    api.patchSettings(patch).then((s) => setConf((c) => ({ ...c, ...s }))).catch(fail);
+  }, [fail]);
+
+  const todoCount = people.filter((p) => p.status === "todo").length;
+
   if (!ready || !conf) {
     return <div style={{ padding: 40, fontFamily: "system-ui", color: "#6A757F" }}>{loadErr || "Đang mở bàn làm việc…"}</div>;
   }
@@ -346,10 +389,11 @@ export default function App() {
           ))}
           <div className="railNote">Không có gì bị xóa. Mọi tin đều nằm trong một thùng.</div>
           <div className="railHead sp">Công cụ</div>
-          {[["find", "Tìm job"], ["replies", "Phản hồi"], ["sweep", "Rà soát"], ["companies", "Công ty"], ["sources", "Nguồn"], ["rules", "Luật"], ["data", "Dữ liệu"]].map(([id, lbl]) => (
+          {[["find", "Tìm job"], ["replies", "Phản hồi"], ["sweep", "Rà soát"], ["people", "Người"], ["journal", "Nhật ký"], ["companies", "Công ty"], ["sources", "Nguồn"], ["rules", "Luật"], ["data", "Dữ liệu"]].map(([id, lbl]) => (
             <button key={id} className={"tool" + (view === id ? " on" : "")} onClick={() => setView(id)}>
               <span>{lbl}</span>
               {id === "replies" && replies.length > 0 && <span className="binN">{replies.length}</span>}
+              {id === "people" && todoCount > 0 && <span className="binN">{todoCount}</span>}
             </button>
           ))}
         </nav>
@@ -364,7 +408,9 @@ export default function App() {
           {view === "sweep" && <Sweep jobs={jobs} move={move} conf={conf} markSweep={markSweep} />}
           {view === "find" && <Find ingest={ingest} pull={pull} startPull={startPull} conf={conf} />}
           {view === "replies" && <Replies replies={replies} confirm={confirmReply} wrong={wrongReply} />}
-          {view === "companies" && <Companies list={conf.companies} jobs={jobs} add={addCompany}
+          {view === "people" && <People people={people} add={addPerson} patch={patchPerson} />}
+          {view === "journal" && <Journal journal={journal} conf={conf} todo={todoCount} setWeeklyLog={setWeeklyLog} patchSettings={patchSettings} />}
+          {view === "companies" && <Companies list={conf.companies} jobs={jobs} people={people} add={addCompany}
             seed={seedCompanies} patch={patchCompany} detect={detectAts} resolve={resolveCandidate} setToast={setToast} />}
           {view === "sources" && <Sources sources={conf.sources} toggle={toggleSource} jobs={jobs} />}
           {view === "rules" && <Rules rules={conf.rules} jobs={jobs} toggleRule={toggleRule} editRule={editRule}
@@ -566,11 +612,11 @@ function BinList({ bin, jobs: unsorted, move, rules, sort, setSort, enrich, star
           </div>
           <div className="rowActs">
             {bin !== "queue" && <button onClick={() => move(j.id, "queue")}>Đưa vào Hàng đọc</button>}
-            {bin === "queue" && <button className="go" onClick={() => move(j.id, "applied")}>Đã nộp</button>}
+            {bin === "queue" && <ApplyPanel onPick={(gut, note) => move(j.id, "applied", null, { gut, note })} />}
             {bin === "queue" && j.jdSource !== "title_only" && <button onClick={() => exportJd(j.id)}>Xuất JD</button>}
-            {bin === "applied" && <button className="go" onClick={() => move(j.id, "applied", "interview")}>Phỏng vấn</button>}
-            {bin === "interview" && <button className="go" onClick={() => move(j.id, "applied", "offer")}>Offer</button>}
-            {["applied", "interview", "offer"].includes(bin) && <button onClick={() => move(j.id, "applied", "rejected")}>Từ chối</button>}
+            {bin === "applied" && <NotePanel label="Phỏng vấn" tone="go" onPick={(note) => move(j.id, "applied", "interview", { note })} />}
+            {bin === "interview" && <NotePanel label="Offer" tone="go" onPick={(note) => move(j.id, "applied", "offer", { note })} />}
+            {["applied", "interview", "offer"].includes(bin) && <NotePanel label="Từ chối" onPick={(note) => move(j.id, "applied", "rejected", { note })} />}
             {["queue", "interview", "rejected"].includes(bin)
               ? <KillPicker onPick={(reason, reasonText) => move(j.id, "killed", null, { reason, reasonText, reasonSource: "human" })} />
               : bin !== "killed" && <button className="off" onClick={() => move(j.id, "killed")}>Loại</button>}
@@ -606,6 +652,49 @@ function KillPicker({ onPick, label = "Loại" }) {
         </>
       )}
       <button className="chipBtn" onClick={() => { setOpen(false); setOther(false); }}>hủy</button>
+    </div>
+  );
+}
+
+/* Nút Đã nộp (bước 5b): gut 1–5 "sẽ được gọi phỏng vấn?" bắt buộc, note tùy chọn. Server từ chối khi thiếu gut,
+   nên nút Xác nhận khóa tới khi chọn. Enter trong ô note = Xác nhận. */
+function ApplyPanel({ onPick }) {
+  const [open, setOpen] = useState(false);
+  const [gut, setGut] = useState(null);
+  const [note, setNote] = useState("");
+  if (!open) return <button className="go" onClick={() => setOpen(true)}>Đã nộp</button>;
+  const reset = () => { setOpen(false); setGut(null); setNote(""); };
+  const submit = () => { if (gut == null) return; onPick(gut, note.trim() || null); reset(); };
+  return (
+    <div className="killPick applyPick">
+      <span className="dim small">sẽ được gọi phỏng vấn?</span>
+      <span className="gutRow">
+        {GUTS.map((g) => <button key={g} className={"chipBtn gut" + (gut === g ? " on" : "")} onClick={() => setGut(g)}>{g}</button>)}
+      </span>
+      <span className="dim small">1 chắc không · 5 chắc có</span>
+      <input value={note} placeholder="ghi chú (tùy chọn): CV bản nào, ai giới thiệu…" onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") reset(); }} />
+      <button className="go" disabled={gut == null} onClick={submit}>Xác nhận</button>
+      <button className="chipBtn" onClick={reset}>hủy</button>
+    </div>
+  );
+}
+
+/* Phỏng vấn / Offer / Từ chối: một ô note tùy chọn rồi Xác nhận (Enter). Tốn thêm một bấm vì event ghi xong thì
+   không gắn note vào được nữa. */
+function NotePanel({ label, tone = "", onPick }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  if (!open) return <button className={tone} onClick={() => setOpen(true)}>{label}</button>;
+  const reset = () => { setOpen(false); setNote(""); };
+  const submit = () => { onPick(note.trim() || null); reset(); };
+  return (
+    <div className="killPick">
+      <span className="dim small">{label} · ghi chú?</span>
+      <input autoFocus value={note} placeholder="tùy chọn, Enter để bỏ qua" onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") reset(); }} />
+      <button className={tone} onClick={submit}>Xác nhận</button>
+      <button className="chipBtn" onClick={reset}>hủy</button>
     </div>
   );
 }
@@ -865,7 +954,7 @@ const TIERS = [["", "chưa xếp"], ["a", "A — rất muốn"], ["b", "B — h�
 
 const ATS_LABEL = { greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", recruitee: "Recruitee", smartrecruiters: "SmartRecruiters", workable: "Workable", personio: "Personio", teamtailor: "Teamtailor" };
 
-function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) {
+function Companies({ list, jobs, people = [], add, seed, patch, detect, resolve, setToast }) {
   const [name, setName] = useState("");
   const [detecting, setDetecting] = useState(null);
 
@@ -886,6 +975,11 @@ function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) 
     return m;
   }, [jobs]);
   const jobCount = (n) => seen.get(norm(n)) || 0;
+  const peopleAt = useMemo(() => {
+    const m = new Map();
+    for (const p of people) if (p.company) { const k = norm(p.company); m.set(k, (m.get(k) || 0) + 1); }
+    return m;
+  }, [people]);
 
   const sorted = [...list].sort((a, b) => {
     const o = { a: 0, b: 1, c: 2, consult: 3, "": 4 };
@@ -914,6 +1008,7 @@ function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) 
           <div className="rowMain">
             <div className="rowTop"><b>{c.name}</b>
               {jobCount(c.name) > 0 && <span className="tagRule">{jobCount(c.name)} tin đã thấy</span>}
+              {peopleAt.get(norm(c.name)) > 0 && <span className="tagRule">{peopleAt.get(norm(c.name))} người quen</span>}
             </div>
             <div className="rowMeta">
               <input className="inline" placeholder="link trang tuyển dụng" value={c.url}
@@ -967,6 +1062,191 @@ function Companies({ list, jobs, add, seed, patch, detect, resolve, setToast }) 
       ))}
     </div>
   );
+}
+
+/* ========================= PEOPLE ========================= */
+/* Người quen để nhắn xin giới thiệu. Không có nút xóa: hết việc thì đổi trạng thái. Danh sách đã xếp ở server:
+   chưa nhắn trước, rồi theo ngày. Rời "chưa nhắn" lần đầu thì server điền ngày hôm nay. */
+function People({ people, add, patch }) {
+  const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
+  const [relation, setRelation] = useState("colleague");
+  const [channel, setChannel] = useState("");
+  const todo = people.filter((p) => p.status === "todo").length;
+
+  const submit = () => {
+    if (!name.trim()) return;
+    add({ name, company: company.trim() || null, relation, channel: channel.trim() || null });
+    setName(""); setCompany(""); setChannel("");
+  };
+
+  return (
+    <div className="pane">
+      <h2>Người</h2>
+      <p className="advice">
+        Một tin nhắn xin giới thiệu đáng hơn ba hồ sơ gửi mù. Danh sách này là việc rẻ: thêm tên lúc nhớ ra,
+        nhắn lúc có 10 phút, đổi chip khi có chuyện. Còn <b>{todo}</b> người chưa nhắn.
+      </p>
+      <div className="addRow">
+        <input value={name} placeholder="Tên" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        <input value={company} placeholder="Công ty" onChange={(e) => setCompany(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        <select value={relation} onChange={(e) => setRelation(e.target.value)}>
+          {RELATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <input value={channel} placeholder="Kênh: LinkedIn, Slack, email…" onChange={(e) => setChannel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        <button onClick={submit}>Thêm</button>
+      </div>
+      {!people.length && <Empty title="Chưa có ai" body="Đồng nghiệp cũ, bạn cùng trường, người gặp ở meetup. Tên trước, nhắn sau." />}
+      {people.map((p) => (
+        <div key={p.id} className="row">
+          <div className="rowMain">
+            <div className="rowTop">
+              <b>{p.name}</b>
+              {p.company && <span className="dim">{p.company}</span>}
+              {p.companyTier && <span className="tagRule">hạng {p.companyTier === "consult" ? "consultancy" : p.companyTier.toUpperCase()}</span>}
+              <span className="pill">{RELATION_LABEL[p.relation] || p.relation}</span>
+              {p.channel && <span className="dim small">{p.channel}</span>}
+            </div>
+            <div className="rowMeta">
+              <label className="dim small">nhắn ngày
+                <input className="inline date" type="date" value={p.contactedAt || ""} onChange={(e) => patch(p.id, { contactedAt: e.target.value })} />
+              </label>
+              <input className="inline" placeholder="ghi chú" value={p.note || ""} onChange={(e) => patch(p.id, { note: e.target.value })} />
+            </div>
+          </div>
+          <div className="rowActs">
+            {PEOPLE_STATUSES.map(([v, l]) => (
+              <button key={v} className={"chipBtn" + (p.status === v ? " on" : "")} onClick={() => { if (p.status !== v) patch(p.id, { status: v }); }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ========================= JOURNAL ========================= */
+/* Nhật ký (bước 5b). Mọi con số đếm từ quyết định của người, không có LLM. Tuần ISO, tuần này trên cùng.
+   Hồ sơ chỉ đếm on-profile hoặc chưa phân tích — nộp off-profile không phải input đáng đếm. */
+const TRANSITION_LABEL = (e) => {
+  if (e.toStatus === "applied" && e.fromStatus !== "applied") return "Đã nộp";
+  if (e.toOutcome === "interview") return "Phỏng vấn";
+  if (e.toOutcome === "offer") return "Offer";
+  if (e.toOutcome === "rejected") return "Từ chối";
+  return e.toOutcome ? `→ ${e.toOutcome}` : `→ ${e.toStatus}`;
+};
+
+function Journal({ journal, conf, todo, setWeeklyLog, patchSettings }) {
+  if (!journal) return <Empty title="Đang tải nhật ký" body="" />;
+  const { weeks, funnel, entries, gut } = journal;
+  return (
+    <div className="pane">
+      <h2>Nhật ký</h2>
+      <p className="advice">
+        Ba thứ mày kiểm soát được: hồ sơ on-profile, tin nhắn, buổi rep. Kết quả (phỏng vấn, offer) là đầu ra, không
+        phải mục tiêu. Tuần này ở dòng đầu. Rep phỏng vấn nhập tay vì không máy nào đếm được.
+      </p>
+      <table className="yield journalTable">
+        <thead>
+          <tr><th>Tuần</th><th>Hồ sơ on-profile</th><th>Tin nhắn</th><th>Rep phỏng vấn</th></tr>
+        </thead>
+        <tbody>
+          {weeks.map((w) => (
+            <tr key={w.week} className={w.current ? "cur" : ""}>
+              <td>{w.week}<div className="dim small">{w.start.slice(5)} → {w.end.slice(5)}</div></td>
+              <td><Progress n={w.apps} target={conf.targetApps} /></td>
+              <td>{w.messages}{w.current && <span className="dim"> · còn {todo} chưa nhắn</span>}</td>
+              <td>
+                <WeekPrep w={w} target={conf.targetPrep} save={(body) => setWeeklyLog(w.week, body)} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="targets">
+        <span className="dim small">mục tiêu tuần:</span>
+        <label className="dim small">hồ sơ <TargetInput value={conf.targetApps} save={(v) => patchSettings({ targetApps: v })} /></label>
+        <span className="dim small">· tin nhắn: hết danh sách</span>
+        <label className="dim small">· rep <TargetInput value={conf.targetPrep} save={(v) => patchSettings({ targetPrep: v })} /></label>
+      </div>
+
+      <div className="stats">
+        <div><b>{funnel.ackRate == null ? "—" : `${funnel.ackRate}%`}</b><span>có hồi âm trong 3 ngày · {funnel.acked}/{funnel.ackPool} hồ sơ đủ 3 ngày</span></div>
+        <div><b>{funnel.daysToRejection == null ? "—" : funnel.daysToRejection}</b><span>ngày trung bình tới từ chối · {funnel.rejected} hồ sơ</span></div>
+        <div><b>{funnel.interviewRate == null ? "—" : `${funnel.interviewRate}%`}</b><span>phỏng vấn trên hồ sơ on-profile · {funnel.interviewed}/{funnel.total}</span></div>
+      </div>
+      <p className="dim small">
+        Hồi âm = mail công ty mày đã Xác nhận ở tab Phản hồi, hoặc đổi thùng, trong 3 ngày sau khi nộp. Hồ sơ off-profile không tính.
+      </p>
+
+      <h3 className="grp">Linh cảm so với kết quả</h3>
+      {gut.rows ? (
+        <table className="yield">
+          <thead><tr><th>Lúc nộp mày đoán</th><th>Đang chờ</th><th>Phỏng vấn / Offer</th><th>Từ chối</th></tr></thead>
+          <tbody>
+            {gut.rows.map((r) => (
+              <tr key={r.gut}><td>{r.gut} / 5</td><td>{r.waiting || ""}</td><td>{r.interview || ""}</td><td>{r.rejected || ""}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="dim small">Hiện khi đủ {gut.min} hồ sơ có linh cảm — hiện có {gut.sample}. Dưới đó bảng chỉ gây ảo giác.</p>
+      )}
+
+      <h3 className="grp">Ghi chú hồ sơ</h3>
+      {!entries.length && <p className="dim small">Chưa có ghi chú. Bấm Đã nộp ở Hàng đọc là có dòng đầu tiên.</p>}
+      {entries.map((e) => (
+        <div key={e.id} className="row">
+          <div className="rowMain">
+            <div className="rowTop">
+              <b>{e.job.title}</b>
+              <span className="dim">{e.job.company}</span>
+              <span className="pill">{TRANSITION_LABEL(e)}</span>
+              {e.gut != null && <span className="tagDays">linh cảm {e.gut}/5</span>}
+            </div>
+            <div className="rowMeta">
+              <span>{fmtTime(e.at)}</span>
+              <span>giờ ở {binOf(e.job)?.label || e.job.status}</span>
+            </div>
+            {e.note && <p className="cardNote small">{e.note}</p>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Progress({ n, target }) {
+  const done = target > 0 && n >= target;
+  return <span className={done ? "hit" : ""}>{n}<span className="dim"> / {target}</span></span>;
+}
+
+/* Ô nhập rep theo tuần: lưu khi rời ô hoặc Enter. Ô trống = chưa nhập (NULL), không phải 0. */
+function WeekPrep({ w, target, save }) {
+  const [prep, setPrep] = useState(w.prep == null ? "" : String(w.prep));
+  const [note, setNote] = useState(w.prepNote || "");
+  useEffect(() => { setPrep(w.prep == null ? "" : String(w.prep)); setNote(w.prepNote || ""); }, [w.prep, w.prepNote]);
+  const commit = () => {
+    const n = prep.trim() === "" ? null : Number(prep);
+    if (n != null && (!Number.isInteger(n) || n < 0)) return;
+    if (n === w.prep && note.trim() === (w.prepNote || "")) return;
+    save({ prep: n, prepNote: note });
+  };
+  const onKey = (e) => { if (e.key === "Enter") e.target.blur(); };
+  return (
+    <span className="prepCell">
+      <input className="prepN" inputMode="numeric" value={prep} onChange={(e) => setPrep(e.target.value)} onBlur={commit} onKeyDown={onKey} />
+      <span className="dim"> / {target}</span>
+      <input className="inline" placeholder="rep gì" value={note} onChange={(e) => setNote(e.target.value)} onBlur={commit} onKeyDown={onKey} />
+    </span>
+  );
+}
+
+function TargetInput({ value, save }) {
+  const [v, setV] = useState(String(value));
+  useEffect(() => { setV(String(value)); }, [value]);
+  const commit = () => { const n = Number(v); if (Number.isInteger(n) && n >= 0 && n !== value) save(n); else setV(String(value)); };
+  return <input className="prepN" inputMode="numeric" value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} />;
 }
 
 /* ========================= SOURCES ========================= */
@@ -1328,6 +1608,21 @@ padding:8px 12px;border-bottom:1px solid var(--line)}
 .tagDays{color:var(--signal);font-variant-numeric:tabular-nums}
 .killPick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;max-width:380px}
 .killPick input{border:1px solid var(--line);border-radius:5px;padding:3px 8px;font-size:12.5px;width:150px}
+.applyPick{max-width:460px}
+.applyPick input{width:250px}
+.gutRow{display:inline-flex;gap:4px}
+.chipBtn.gut{padding:3px 9px;font-variant-numeric:tabular-nums}
+.killPick .go{border-color:var(--signal);color:var(--signal)}
+.killPick button:disabled{opacity:.4;cursor:default}
+.journalTable tr.cur td{background:#F3F6F8;font-weight:600}
+.journalTable tr.cur td .dim{font-weight:400}
+.journalTable td .hit{color:#2C5A36}
+.prepCell{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.prepN{width:46px;padding:2px 6px;font-size:13px;text-align:right;font-variant-numeric:tabular-nums}
+.targets{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.targets label{display:inline-flex;gap:4px;align-items:center}
+.inline.date{min-width:0;width:130px}
+.cardNote.small{margin:6px 0 0;font-size:13px;color:#3E4952}
 .fitHead{display:flex;flex-direction:column;gap:8px}
 .fitRun{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .fitRun .ghost{align-self:center}
