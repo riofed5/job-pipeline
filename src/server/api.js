@@ -7,6 +7,8 @@ import { openDb, createBackups, exportAll } from "../core/db.js";
 import * as jobs from "../core/jobs.js";
 import * as config from "../core/config.js";
 import { listPending } from "../core/replies.js";
+import * as people from "../core/people.js";
+import * as journal from "../core/journal.js";
 import { manualSource } from "../ingest/normalize.js";
 import { createPuller, loadEnv } from "../ingest/pull.js";
 import { createEnricher, enrichConfigured, exportJd } from "../ingest/enrich.js";
@@ -45,6 +47,7 @@ app.get("/api/settings", (req, res) =>
   res.json({ ...config.getSettings(db), canUndo: jobs.canUndo(db), ...backups.status() }));
 app.get("/api/export", (req, res) => res.json(exportAll(db)));
 app.get("/api/stats/kills", (req, res) => res.json(jobs.killReasonStats(db, Number(req.query.days) || 30)));
+app.patch("/api/settings", (req, res) => res.json(config.patchSettings(db, req.body)));
 
 /* ---------- tin ---------- */
 app.post("/api/ingest", (req, res) => {
@@ -52,8 +55,8 @@ app.post("/api/ingest", (req, res) => {
   res.json(jobs.ingest(db, items, manualSource(source)));
 });
 app.post("/api/jobs/:id/status", (req, res) => {
-  const { status, outcome = null, reason = null, reasonText = null, reasonSource = null } = req.body ?? {};
-  const job = jobs.decide(db, req.params.id, status, outcome, { reason, reasonText, reasonSource });
+  const { status, outcome = null, reason = null, reasonText = null, reasonSource = null, note = null, gut = null } = req.body ?? {};
+  const job = jobs.decide(db, req.params.id, status, outcome, { reason, reasonText, reasonSource, note, gut });
   // Tin vào Hàng đọc (phím 1) → phân tích fit ở nền. Chưa cấu hình key thì thôi, không lỗi.
   if (job.status === "queue" && enrichConfigured()) enricher.start();
   res.json({ job, canUndo: jobs.canUndo(db), enrich: enricher.status() });
@@ -75,6 +78,13 @@ app.post("/api/jobs/:id/export-jd", (req, res) => {
 app.get("/api/replies", (req, res) => res.json(listPending(db)));
 app.post("/api/replies/:id/confirm", (req, res) => res.json({ ...jobs.confirmReply(db, Number(req.params.id)), canUndo: jobs.canUndo(db) }));
 app.post("/api/replies/:id/wrong", (req, res) => res.json(jobs.rejectReply(db, Number(req.params.id))));
+
+/* ---------- người quen + nhật ký (bước 5b): không có route xóa người; weekly_log là số nhập tay ---------- */
+app.get("/api/people", (req, res) => res.json(people.listPeople(db)));
+app.post("/api/people", (req, res) => res.json(people.addPerson(db, req.body)));
+app.patch("/api/people/:id", (req, res) => res.json(people.patchPerson(db, req.params.id, req.body)));
+app.get("/api/journal", (req, res) => res.json(journal.journal(db)));
+app.put("/api/journal/:week", (req, res) => res.json(journal.setWeeklyLog(db, req.params.week, req.body)));
 
 /* ---------- luật ---------- */
 app.post("/api/rules", (req, res) => res.json(config.createRule(db)));

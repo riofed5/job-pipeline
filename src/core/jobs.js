@@ -20,6 +20,8 @@ export const OUTCOMES = ["interview", "rejected", "offer"];
 /* Lý do loại tay (events.reason): cùng mã với fit.reason của model, thêm dead và other. UI giữ bản sao ở ui/fit.js. */
 export const KILL_REASONS = ["domain", "stack", "level_low", "level_high", "language", "location", "dead", "other"];
 export const REASON_SOURCES = ["human", "model"];
+/* Linh cảm lúc nộp (events.gut): 1 = chắc không, 5 = chắc có. So với kết quả thật ở tab Nhật ký. */
+export const GUTS = [1, 2, 3, 4, 5];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const httpError = (status, message) => Object.assign(new Error(message), { status });
@@ -99,15 +101,15 @@ const reviveTarget = (status) => (status === "archived" ? "maybe" : "new");
 /* Mọi lần đổi status hoặc outcome của một tin đã có đi qua hàm này. status_at chỉ đổi khi status đổi,
    hoặc khi resetClock (hoàn tác: tin vừa thật sự quay lại thùng đó). outcome chỉ sống ở applied;
    applied_at ghi lúc BƯỚC VÀO applied (đổi outcome bên trong applied không đụng nó). */
-function writeStatus(db, job, { status, outcome = null, decidedBy, killedBy, by, ruleId = null, undoOf = null, at, resetClock = false, reason = null, reasonText = null, reasonSource = null }) {
+function writeStatus(db, job, { status, outcome = null, decidedBy, killedBy, by, ruleId = null, undoOf = null, at, resetClock = false, reason = null, reasonText = null, reasonSource = null, note = null, gut = null }) {
   const statusAt = resetClock || status !== job.status ? at : job.status_at;
   const out = status === "applied" ? outcome : null;
   const appliedAt = status === "applied" && job.status !== "applied" ? at : job.applied_at;
   stmt(db, "UPDATE jobs SET status = ?, status_at = ?, decided_by = ?, killed_by = ?, outcome = ?, applied_at = ? WHERE id = ?")
     .run(status, statusAt, decidedBy, killedBy, out, appliedAt, job.id);
-  stmt(db, `INSERT INTO events (job_id, at, from_status, to_status, by, rule_id, prev_decided_by, prev_killed_by, undo_of, from_outcome, to_outcome, reason, reason_text, reason_source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(job.id, at, job.status, status, by, ruleId, job.decided_by, job.killed_by, undoOf, job.outcome, out, reason, reasonText, reasonSource);
+  stmt(db, `INSERT INTO events (job_id, at, from_status, to_status, by, rule_id, prev_decided_by, prev_killed_by, undo_of, from_outcome, to_outcome, reason, reason_text, reason_source, note, gut)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(job.id, at, job.status, status, by, ruleId, job.decided_by, job.killed_by, undoOf, job.outcome, out, reason, reasonText, reasonSource, note, gut);
 }
 
 export function ingest(db, items, { source, channel }) {
@@ -154,8 +156,10 @@ export function ingest(db, items, { source, channel }) {
 }
 
 /* Quyết định tay. killed_by giữ nguyên để còn hiện "luật: …"; decided_by = human là đủ để luật không đụng vào.
-   outcome chỉ đi kèm status = 'applied'; "Trả về Hàng đọc" là decide(id, 'queue') và outcome tự về NULL. */
-export function decide(db, id, status, outcome = null, { reason = null, reasonText = null, reasonSource = null } = {}) {
+   outcome chỉ đi kèm status = 'applied'; "Trả về Hàng đọc" là decide(id, 'queue') và outcome tự về NULL.
+   Nhật ký hồ sơ (bước 5b): BƯỚC VÀO applied từ thùng khác bắt buộc gut 1–5 ("sẽ được gọi phỏng vấn?"), note tùy chọn;
+   đổi outcome bên trong applied chỉ nhận note. gut ở chuyển khác → 400. Hoàn tác không đi qua đây nên không hỏi. */
+export function decide(db, id, status, outcome = null, { reason = null, reasonText = null, reasonSource = null, note = null, gut = null } = {}) {
   if (!STATUSES.includes(status)) throw httpError(400, `status không hợp lệ: ${status}`);
   if (outcome != null && !OUTCOMES.includes(outcome)) throw httpError(400, `outcome không hợp lệ: ${outcome}`);
   if (outcome != null && status !== "applied") throw httpError(400, "outcome chỉ đi kèm status 'applied'");
@@ -167,10 +171,16 @@ export function decide(db, id, status, outcome = null, { reason = null, reasonTe
     if (status !== "killed") throw httpError(400, "reason chỉ đi kèm status 'killed'");
     if (!REASON_SOURCES.includes(reasonSource)) throw httpError(400, "reason_source phải là human hoặc model");
   }
+  const noteText = note == null ? null : String(note).trim() || null;
+  if (gut != null && !GUTS.includes(gut)) throw httpError(400, "gut phải là số nguyên 1–5");
+  if (noteText != null && status !== "applied") throw httpError(400, "note chỉ đi kèm status 'applied'");
   return db.transaction(() => {
     const job = row(db, id);
     if (!job) throw httpError(404, "không có tin này");
-    writeStatus(db, job, { status, outcome, decidedBy: "human", killedBy: job.killed_by, by: "human", at: now(), reason, reasonText: reason == null ? null : text, reasonSource });
+    const entering = status === "applied" && job.status !== "applied";
+    if (entering && gut == null) throw httpError(400, "bấm Đã nộp phải chọn gut 1–5: sẽ được gọi phỏng vấn?");
+    if (!entering && gut != null) throw httpError(400, "gut chỉ ghi lúc bước vào Đã nộp");
+    writeStatus(db, job, { status, outcome, decidedBy: "human", killedBy: job.killed_by, by: "human", at: now(), reason, reasonText: reason == null ? null : text, reasonSource, note: noteText, gut });
     return getJob(db, id);
   })();
 }

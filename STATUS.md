@@ -10,6 +10,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 | 3b | Phản hồi: `jobs.outcome` + thùng sau khi nộp · `replies.js` · tab Phản hồi + aliases | **Xong**, chưa kéo thật qua Claude | 2026-10-01 |
 | 4 | `tmt.js` | Chưa | |
 | 5 | `enrich.js` + tab fit trong Hàng đọc + Xuất JD | **Xong**, đã gọi thật 1 tin (Trimble) để kiểm request | 2026-10-02 |
+| 5b | Người quen (`people`) + Nhật ký (tiến độ tuần, ghi chú hồ sơ, gut) | **Lõi xong** (1/2), UI chưa | 2026-10-05 |
 | 6 | Cron + bảng theo dõi | Chưa | |
 
 ## Bước 2 + 3 có gì
@@ -28,7 +29,7 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Ashby**: feed trả cả tin `isListed: false` (tin đã gỡ, kể cả "Unlisted TEST job"); parser bỏ chúng nên `closed_at` bắt được.
 - **Luật mẫu thêm sau bước 1** (seed cho DB mới, migration cho DB đang dùng): `r_abroad` — location chứa `us, gb, uk, pl, de, se, dk, ca, india, norway` → loại (không dùng `in`, `no` vì trùng từ tiếng Anh); `r_openapp` — title chứa `open application, avoin hakemus, general application, spontaneous application` → Ngờ vực; `r_otherlang` — title chứa `german-speaking, swedish-speaking, spanish, serbian, ingeniero, *entwickler, *utvecklare` → Ngờ vực (dấu * vì tiếng Đức/Thụy Điển ghép từ). Luật loại thắng luật Ngờ vực khi cả hai khớp.
 - **`jobs.deadline`**: cột có, để trống tới bước 5. Mỗi thùng có nút xếp: mới thêm (mặc định) / cũ nhất / deadline gần nhất, trống xếp cuối. Hộp đến và Rà soát không có nút xếp.
-- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 83 kịch bản. Schema v15.
+- Cấu hình: `.env` (xem `.env.example`), nạp lúc server bật. `npm run check` 90 kịch bản. Schema v16.
 
 ## Bước 3b có gì (1/3 — sau khi nộp)
 
@@ -72,6 +73,19 @@ Trạng thái theo mục 8 của SPEC.md. Cổng chặn vẫn là con số trong
 - **Tab Luật, bảng "Loại bằng tay theo lý do, 30 ngày"** (`GET /api/stats/kills`, `jobs.killReasonStats`): gom theo (nguồn, lý do), bỏ event đã hoàn tác, dòng riêng cho "không ghi lý do". Cột "model đã nói on-profile" chỉ tính nguồn human, so với `fit_json` hiện tại của tin (không snapshot lúc loại). Số cao ở một lý do = model chưa hiểu mày ở điểm đó.
 - **Sửa nút đen chữ đen** (có từ bước 1, port nguyên từ reference): `.jh button{color:inherit}` ưu tiên cao hơn `.primary`, `.ghost`, `.chipBtn`, `.linkBtn`, `.sweepBtn` nên chữ nút lấy màu đen của trang. Giờ dòng đó bọc `:where()` (ưu tiên 0); nút không đặt màu vẫn kế thừa. Đã chụp cả bộ nút để so.
 - Server đang chạy từ trước bước 5 phải khởi động lại (`npm run ui`) mới có route `/api/enrich`; UI mở sẵn sẽ báo "Không kết nối được server" tới lúc đó.
+
+## Bước 5b có gì (1/2 — lõi: `src/core/people.js`, `src/core/journal.js`, `src/core/week.js`, API)
+
+- **Schema v16**: bảng `people` (id, name, company, relation CHECK colleague|alumni|community|other, channel, status CHECK todo|sent|replied|referral, contacted_at YYYY-MM-DD, note, created_at), bảng `weekly_log` (week 'YYYY-Www' PK, prep, prep_note, updated_at), `events.note`, `events.gut` CHECK 1–5, settings `target_apps` = 5, `target_prep` = 3. CHECK của jobs.status không nới. `exportAll` kèm hai bảng mới.
+- **Người quen** (`people.js`, chỉ ghi vào people): không có hàm/route xóa. Rời `todo` lần đầu mà chưa có ngày → `contacted_at` = hôm nay (đây là con số "tin nhắn đã gửi"); ngày sửa tay được, xóa trống được; đổi tiếp hay về todo không đụng ngày. `company` nối bảng companies bằng `norm(name)` lúc đọc (`companyId`, `companyTier`), không FK. Xếp todo → sent → replied → referral, trong nhóm ngày liên hệ (hoặc ngày thêm) mới trước. `countTodo` cho rail.
+- **Nhật ký hồ sơ** (`jobs.decide`): BƯỚC VÀO `applied` từ thùng khác **bắt buộc `gut` 1–5** ("sẽ được gọi phỏng vấn?"), `note` tùy chọn; đổi outcome bên trong applied (Phỏng vấn / Từ chối / Offer) chỉ nhận `note`. `gut` ở chuyển khác, `gut` khi đã ở applied, `note` kèm status khác applied → 400, không ghi gì. Hoàn tác không đi qua decide nên không hỏi. Hồ sơ nộp trước v16 không có gut → không vào bảng gut.
+- **Tuần ISO** (`week.js`, thuần, UI dùng chung): `isoWeek`, `weekStart`, `weeksBetween` (mới nhất trước). Ngày theo giờ máy, tính bằng UTC để không lệch.
+- **`journal.js`** chỉ đọc jobs/events/people/replies, ghi duy nhất `weekly_log`. "On-profile" = `fit_json` hiện tại nói on **hoặc chưa phân tích**; off không đếm. Event "còn hiệu lực" = không phải lần hoàn tác và chưa bị hoàn tác.
+  - `weeklyProgress`: tuần từ `start_date` tới hôm nay, tuần này trên cùng (`current`). `apps` = distinct tin on-profile bước vào applied (by human) trong tuần — nộp, về Hàng đọc, nộp lại cùng tuần tính một; `messages` = `people.contacted_at` trong tuần; `prep`, `prepNote` từ weekly_log.
+  - `funnel` trên hồ sơ on-profile đang ở applied: `ackRate` = trong hồ sơ nộp ≥ 3 ngày trước, % có reply người đã **Xác nhận** (khác no_reply, ngày mail trong 3 ngày sau applied_at) hoặc đổi outcome trong 3 ngày; `daysToRejection` = trung bình applied_at → event từ chối đầu tiên; `interviewRate` = từng tới interview/offer ÷ tổng. Trên DB thật hôm nay: 20 hồ sơ, 17 đủ 3 ngày, 5 có hồi âm (29%), 7 từ chối trung bình 7,3 ngày, 0 phỏng vấn.
+  - `journalEntries`: event có note hoặc gut, mới nhất trước, kèm title/company/thùng hiện tại, không có mô tả công việc. `gutTable`: gut của lần nộp gần nhất × kết quả hiện tại (chờ / phỏng vấn+offer / từ chối), tin đã rời applied không tính; dưới 10 hồ sơ trả `rows = null` kèm `sample`.
+- **API**: `GET/POST /api/people`, `PATCH /api/people/:id`, `GET /api/journal` (weeks, funnel, entries, gut), `PUT /api/journal/:week` ({prep, prepNote}), `PATCH /api/settings` (chỉ targetApps, targetPrep, số nguyên ≥ 0). `POST /api/jobs/:id/status` nhận thêm `note`, `gut`. `ui/api.js` đã có hàm gọi; tab UI ở commit sau.
+- Kiểm: 7 kịch bản mới (90 tổng); 22 lệnh `decide(..., "applied")` cũ thêm `{ gut: 3 }`. Đã chạy migration + API trên bản sao DB thật ở server riêng (cổng 5199).
 
 ## Còn mở
 

@@ -76,7 +76,22 @@ export function getSettings(db) {
     pullLocations: m.pull_locations ?? DEFAULT_LOCATIONS,
     lastPull: m.last_pull ?? null,
     lastPullResult,
+    // Mục tiêu tuần ở tab Nhật ký (bước 5b). Tin nhắn không có số: mục tiêu là hết danh sách todo.
+    targetApps: Number(m.target_apps) || 5,
+    targetPrep: Number(m.target_prep) || 3,
   };
+}
+
+/* Chỉ hai mục tiêu tuần sửa được từ UI; số nguyên không âm. */
+export function patchSettings(db, patch = {}) {
+  const cols = { targetApps: "target_apps", targetPrep: "target_prep" };
+  const bad = Object.keys(patch).filter((k) => !(k in cols));
+  if (bad.length) throw httpError(400, `không sửa được: ${bad.join(", ")}`);
+  for (const [k, v] of Object.entries(patch)) {
+    if (!Number.isInteger(v) || v < 0) throw httpError(400, `${k} phải là số nguyên không âm`);
+  }
+  db.transaction(() => { for (const [k, v] of Object.entries(patch)) setSetting(db, cols[k], v); })();
+  return getSettings(db);
 }
 
 export function setSetting(db, key, value) {

@@ -252,6 +252,37 @@ const MIGRATIONS = [
     if (!has("reason_text")) db.exec("ALTER TABLE events ADD COLUMN reason_text TEXT");
     if (!has("reason_source")) db.exec("ALTER TABLE events ADD COLUMN reason_source TEXT CHECK (reason_source IN ('human','model'))");
   },
+  /* v16 — bước 5b. people: người quen để nhắn xin giới thiệu; không xóa, chỉ đổi status; company nối với bảng companies
+     theo norm(name) lúc đọc, không FK. weekly_log: số liệu nhập tay theo tuần ISO (rep phỏng vấn) — chỉ thứ không suy ra
+     được từ events. events.note / events.gut: ghi chú hồ sơ và linh cảm 1–5 "sẽ được gọi phỏng vấn?" lúc bấm Đã nộp;
+     note cũng cho Phỏng vấn / Từ chối / Offer. Mục tiêu tuần ở settings (target_apps, target_prep). */
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS people (
+        id           TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        company      TEXT,
+        relation     TEXT NOT NULL DEFAULT 'other' CHECK (relation IN ('colleague','alumni','community','other')),
+        channel      TEXT,
+        status       TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','sent','replied','referral')),
+        contacted_at TEXT,                         -- YYYY-MM-DD, ngày nhắn lần đầu
+        note         TEXT,
+        created_at   TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS weekly_log (
+        week       TEXT PRIMARY KEY,                -- YYYY-Www (tuần ISO)
+        prep       INTEGER,                        -- số buổi rep phỏng vấn
+        prep_note  TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const has = (col) => db.pragma("table_info(events)").some((c) => c.name === col);
+    if (!has("note")) db.exec("ALTER TABLE events ADD COLUMN note TEXT");
+    if (!has("gut")) db.exec("ALTER TABLE events ADD COLUMN gut INTEGER CHECK (gut BETWEEN 1 AND 5)");
+    const setting = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING");
+    setting.run("target_apps", "5");
+    setting.run("target_prep", "3");
+  },
 ];
 
 export function openDb(file) {
@@ -272,7 +303,7 @@ export function openDb(file) {
 
 /* Dump mọi bảng cho nút "Tải file sao lưu". Đây là file sao lưu, không phải màn hình — có description. */
 export function exportAll(db) {
-  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings", "mail_seen", "reply_mails", "reply_runs", "replies"];
+  const tables = ["jobs", "sightings", "events", "rules", "companies", "sources", "settings", "mail_seen", "reply_mails", "reply_runs", "replies", "people", "weekly_log"];
   return {
     exportedAt: now(),
     schemaVersion: db.pragma("user_version", { simple: true }),

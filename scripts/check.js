@@ -24,6 +24,9 @@ import { searchQuery, fetchCompanyMails, assessReplies, buildRepliesRequest, cre
 import { exportAll } from "../src/core/db.js";
 import { fetchJd, jdFromHtml, normalizeFit, buildFitRequest, assessFit, createEnricher, cvHashOf, loadCv, exportJd, slug, MAX_JD_CHARS } from "../src/ingest/enrich.js";
 import { fitTab, fitCounts, isDead, summarizeFit, KILL_REASONS as UI_KILL_REASONS } from "../src/ui/fit.js";
+import * as P from "../src/core/people.js";
+import * as G from "../src/core/journal.js";
+import { isoWeek, weekStart, weeksBetween } from "../src/core/week.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DAY = 24 * 60 * 60 * 1000;
@@ -357,7 +360,7 @@ check("tự lưu trữ không bao giờ đụng new, queue, applied, killed", ()
   const ids = {};
   for (const status of Object.keys(want)) {
     const j = add(db, `Engineer ${status}`);
-    if (status !== "new") J.decide(db, j.id, status);
+    if (status !== "new") J.decide(db, j.id, status, null, status === "applied" ? { gut: 3 } : {});
     backdate(db, j.id, 100, ["status_at", "found_at"]);
     ids[status] = j.id;
   }
@@ -374,7 +377,7 @@ check("outcome: Đã nộp → Phỏng vấn → Offer là ba event; applied_at 
   const db = openDb(":memory:");
   const a = add(db, "Backend Engineer");
   J.decide(db, a.id, "queue");
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   const t0 = job(db, a.id).applied_at;
   ok(t0, "applied_at phải được ghi");
   eq(job(db, a.id).outcome, null, "mới nộp: chưa có outcome");
@@ -393,7 +396,7 @@ check("outcome: Đã nộp → Phỏng vấn → Offer là ba event; applied_at 
   J.decide(db, a.id, "queue");
   eq([job(db, a.id).status, job(db, a.id).outcome], ["queue", null], "rời applied");
   backdate(db, a.id, 10, ["applied_at"]);
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   ok(Date.parse(job(db, a.id).applied_at) > Date.now() - DAY, "nộp lại: applied_at là lúc nộp lại, không phải ngày cũ");
   invariants(db);
 });
@@ -401,7 +404,7 @@ check("outcome: Đã nộp → Phỏng vấn → Offer là ba event; applied_at 
 check("U hoàn tác cả outcome: Offer → về Phỏng vấn → về Đã nộp; ứng viên U so cả outcome", () => {
   const db = openDb(":memory:");
   const a = add(db, "Backend Engineer");
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   J.decide(db, a.id, "applied", "interview");
   J.decide(db, a.id, "applied", "offer");
   eq(J.undo(db).job.outcome, "interview", "U lần 1");
@@ -427,7 +430,7 @@ check("decide: outcome lạ, hoặc outcome kèm status khác applied → 400, k
 check("tự lưu trữ, chạy lại luật, tắt luật không đụng tin đã nộp có outcome", () => {
   const db = openDb(":memory:");
   const a = add(db, "Senior Backend Engineer"); // r_senior_soft → doubt
-  J.decide(db, a.id, "applied", "interview");
+  J.decide(db, a.id, "applied", "interview", { gut: 3 });
   backdate(db, a.id, 100, ["status_at", "found_at", "applied_at"]);
   eq(J.archiveStale(db).moved, 0, "tự lưu trữ");
   J.rerunRules(db);
@@ -439,12 +442,12 @@ check("tự lưu trữ, chạy lại luật, tắt luật không đụng tin đ�
 check("backfillAppliedAt: chỉ điền chỗ trống, lấy lần bước vào applied cuối, idempotent", () => {
   const db = openDb(":memory:");
   const a = add(db, "Backend Engineer");
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   J.decide(db, a.id, "queue");
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   J.decide(db, a.id, "applied", "interview"); // không phải "bước vào" applied
   const b = add(db, "Data Engineer");
-  J.decide(db, b.id, "applied");
+  J.decide(db, b.id, "applied", null, { gut: 3 });
   const bAt = job(db, b.id).applied_at;
   const want = db.prepare("SELECT MAX(at) at FROM events WHERE job_id = ? AND to_status = 'applied' AND from_status IS NOT 'applied'").get(a.id).at;
   // Giả DB trước v12: cột trống.
@@ -1170,10 +1173,10 @@ check("v13: bảng replies, reply_mails, reply_runs có mặt và được xuấ
   const c = add(db, "Platform Engineer", "Wolt");
   const d = add(db, "SRE", "Wolt");
   const e = add(db, "Dev", "Oura");
-  J.decide(db, a.id, "applied");
-  J.decide(db, b.id, "applied", "interview");
-  J.decide(db, c.id, "applied", "rejected"); // không theo dõi nữa
-  J.decide(db, d.id, "applied", "offer");    // không theo dõi nữa
+  J.decide(db, a.id, "applied", null, { gut: 3 });
+  J.decide(db, b.id, "applied", "interview", { gut: 3 });
+  J.decide(db, c.id, "applied", "rejected", { gut: 3 }); // không theo dõi nữa
+  J.decide(db, d.id, "applied", "offer", { gut: 3 });    // không theo dõi nữa
   J.decide(db, e.id, "queue");
   const groups = R.trackedApplications(db);
   eq(groups.map((g) => [g.name, g.applications.length]), [["Reaktor", 2]], "chỉ Reaktor, 2 hồ sơ");
@@ -1267,9 +1270,9 @@ await checkAsync("bước phản hồi: tên khác vào SEARCH, mail lưu, đề
   const a = add(db, "Backend Engineer", "Reaktor");
   const b = add(db, "Data Engineer", "Reaktor");
   const c = add(db, "SRE", "Wolt");
-  J.decide(db, a.id, "applied");
-  J.decide(db, b.id, "applied", "interview");
-  J.decide(db, c.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
+  J.decide(db, b.id, "applied", "interview", { gut: 3 });
+  J.decide(db, c.id, "applied", null, { gut: 3 });
   const co = C.addCompany(db, { name: "Reaktor" }).company;
   db.prepare("UPDATE companies SET aliases = 'Reaktor Group' WHERE id = ?").run(co.id);
   const snapshot = () => JSON.stringify([db.prepare("SELECT * FROM jobs ORDER BY id").all(), db.prepare("SELECT * FROM events ORDER BY id").all()]);
@@ -1338,7 +1341,7 @@ await checkAsync("bước phản hồi: tên khác vào SEARCH, mail lưu, đề
 
 check("confirmReply: rejection → Từ chối, interview/assessment → Phỏng vấn, ack chỉ ghi nhận; event của người; U hoàn tác được; không đụng tin đã rời applied hay đã offer", () => {
   const db = openDb(":memory:");
-  const mk = (title, outcome = null) => { const j = add(db, title, "Reaktor"); J.decide(db, j.id, "applied", outcome); return j.id; };
+  const mk = (title, outcome = null) => { const j = add(db, title, "Reaktor"); J.decide(db, j.id, "applied", outcome, { gut: 3 }); return j.id; };
   const a = mk("A"), b = mk("B", "interview"), c = mk("C"), d = mk("D"), e = mk("E", "offer"), f = mk("F", "interview");
   R.storeMail(db, "reaktor", { messageId: "<m1>", from: "Reaktor", subject: "Interview", date: "2026-09-25T10:00:00Z", text: "t" });
   const prop = (jobId, status, evidence = "<m1>") => Number(R.addProposal(db, "reaktor", { jobId, status, evidence, note: "" }));
@@ -1374,7 +1377,7 @@ check("confirmReply: rejection → Từ chối, interview/assessment → Phỏng
 check("rejectReply: chỉ ghi Sai, không đụng jobs/events; đã xử lý → 409", () => {
   const db = openDb(":memory:");
   const a = add(db, "A", "Reaktor");
-  J.decide(db, a.id, "applied");
+  J.decide(db, a.id, "applied", null, { gut: 3 });
   const id = Number(R.addProposal(db, "reaktor", { jobId: a.id, status: "rejection", evidence: null, note: "" }));
   const before = JSON.stringify([db.prepare("SELECT * FROM jobs").all(), db.prepare("SELECT * FROM events").all()]);
   eq(J.rejectReply(db, id).reply.resolution, "wrong", "ghi Sai");
@@ -1438,7 +1441,7 @@ check("pendingFit: chỉ Hàng đọc; chưa có fit hoặc CV đổi; trần; d
   const c = add(db, "C", "Wolt");
   const d = add(db, "D", "Wolt");
   for (const j of [a, b, c]) J.decide(db, j.id, "queue");
-  J.decide(db, d.id, "applied");
+  J.decide(db, d.id, "applied", null, { gut: 3 });
   J.setFit(db, b.id, { fit: { fit: "on" }, cvHash: "h1" });
   J.setFit(db, c.id, { fit: { fit: "off" }, cvHash: "h0" });
   eq(J.pendingFit(db, "h1").map((x) => x.title).sort(), ["A", "C"], "A chưa có fit, C fit với CV cũ, B xong, D không ở Hàng đọc");
@@ -1748,6 +1751,207 @@ check("killReasonStats: gom theo (lý do, nguồn); modelOn chỉ với human v�
     { reason: null, source: null, count: 2, modelOn: null },
   ], "bảng");
   eq(J.killReasonStats(db, 60).some((x) => x.reason === "domain"), true, "cửa sổ 60 ngày thì thấy tin cũ");
+  invariants(db);
+});
+
+/* ============================ bước 5b: người quen và nhật ký ============================ */
+
+check("v16: people, weekly_log, events.note/gut có mặt; exportAll kèm hai bảng; mục tiêu mặc định 5 / 3", () => {
+  const db = openDb(":memory:");
+  eq(db.pragma("user_version", { simple: true }), 16, "schema");
+  const cols = (t) => db.pragma(`table_info(${t})`).map((c) => c.name);
+  eq(cols("people").includes("contacted_at"), true, "people");
+  eq(cols("weekly_log"), ["week", "prep", "prep_note", "updated_at"], "weekly_log");
+  ok(cols("events").includes("note") && cols("events").includes("gut"), "events.note/gut");
+  const dump = exportAll(db);
+  ok("people" in dump && "weekly_log" in dump, "exportAll thiếu bảng mới");
+  const s = C.getSettings(db);
+  eq([s.targetApps, s.targetPrep], [5, 3], "mục tiêu mặc định");
+  eq(C.patchSettings(db, { targetApps: 7 }).targetApps, 7, "sửa mục tiêu");
+  for (const bad of [{ targetApps: -1 }, { targetApps: 2.5 }, { maybeTTL: 3 }]) {
+    let err = null;
+    try { C.patchSettings(db, bad); } catch (e) { err = e; }
+    eq(err?.status, 400, `${JSON.stringify(bad)} phải 400`);
+  }
+});
+
+check("decide: bước vào Đã nộp bắt buộc gut 1–5; gut ở chuyển khác → 400; note ghi vào event; đổi outcome chỉ nhận note; hoàn tác không hỏi gut", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "Backend Engineer");
+  J.decide(db, a.id, "queue");
+  const nEvents = () => one(db, "SELECT COUNT(*) n FROM events").n;
+  const before = nEvents();
+  for (const [st, out, extra, why] of [
+    ["applied", null, {}, "thiếu gut"],
+    ["applied", null, { gut: 0 }, "gut 0"],
+    ["applied", null, { gut: 6 }, "gut 6"],
+    ["applied", null, { gut: "3" }, "gut chuỗi"],
+    ["queue", null, { gut: 3 }, "gut kèm queue"],
+    ["killed", null, { note: "x" }, "note kèm killed"],
+  ]) {
+    let err = null;
+    try { J.decide(db, a.id, st, out, extra); } catch (e) { err = e; }
+    eq(err?.status, 400, `${why} phải 400`);
+  }
+  eq([job(db, a.id).status, nEvents()], ["queue", before], "không ghi gì khi 400");
+  J.decide(db, a.id, "applied", null, { gut: 4, note: "  CV bản B  " });
+  let ev = one(db, "SELECT note, gut FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 1", a.id);
+  eq(ev, { note: "CV bản B", gut: 4 }, "event nộp ghi note (đã trim) và gut");
+  let err = null;
+  try { J.decide(db, a.id, "applied", "interview", { gut: 5 }); } catch (e) { err = e; }
+  eq(err?.status, 400, "đã ở applied thì không nhận gut nữa");
+  J.decide(db, a.id, "applied", "interview", { note: "gọi 15 phút" });
+  ev = one(db, "SELECT note, gut, to_outcome FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 1", a.id);
+  eq(ev, { note: "gọi 15 phút", gut: null, to_outcome: "interview" }, "đổi outcome: note có, gut không");
+  J.decide(db, a.id, "applied", "rejected", { note: "" });
+  eq(one(db, "SELECT note FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 1", a.id).note, null, "note rỗng → NULL");
+  // Hoàn tác về Hàng đọc rồi hoàn tác tiếp... không: U là nghịch đảo của lần gần nhất. Kịch bản: rời applied rồi U quay lại.
+  J.decide(db, a.id, "queue");
+  eq(J.undo(db).job.status, "applied", "U quay lại Đã nộp không cần gut");
+  invariants(db);
+});
+
+check("people: thêm, đổi trạng thái điền contacted_at hôm nay một lần, ngày sửa tay/xóa được, nối companies theo norm(name), xếp todo trước, không có hàm xóa", () => {
+  const db = openDb(":memory:");
+  ok(!("deletePerson" in P) && !("removePerson" in P), "people.js không được có hàm xóa");
+  for (const bad of [{ name: " " }, { name: "A", relation: "friend" }]) {
+    let err = null;
+    try { P.addPerson(db, bad); } catch (e) { err = e; }
+    eq(err?.status, 400, `${JSON.stringify(bad)} phải 400`);
+  }
+  C.addCompany(db, { name: "Wärtsilä", tier: "a" });
+  const a = P.addPerson(db, { name: " Anna  Virtanen ", company: "wartsila", relation: "alumni", channel: "LinkedIn" });
+  eq([a.name, a.status, a.contactedAt, a.companyTier, Boolean(a.companyId)], ["Anna Virtanen", "todo", null, "a", true], "thêm + nối công ty qua norm");
+  const b = P.addPerson(db, { name: "Bo", company: "Nobody Oy" });
+  eq([b.companyId, b.companyTier], [null, null], "không khớp công ty");
+  const today = new Date().toLocaleDateString("sv-SE");
+  eq(P.patchPerson(db, a.id, { status: "sent" }).contactedAt, today, "rời todo → contacted_at hôm nay");
+  db.prepare("UPDATE people SET contacted_at = '2026-09-01' WHERE id = ?").run(a.id);
+  eq(P.patchPerson(db, a.id, { status: "replied" }).contactedAt, "2026-09-01", "đổi tiếp không ghi đè ngày");
+  eq(P.patchPerson(db, a.id, { status: "todo" }).contactedAt, "2026-09-01", "về todo không xóa ngày");
+  eq(P.patchPerson(db, a.id, { status: "sent" }).contactedAt, "2026-09-01", "đã có ngày thì không điền lại");
+  eq(P.patchPerson(db, a.id, { contactedAt: "" }).contactedAt, null, "xóa ngày");
+  eq(P.patchPerson(db, b.id, { status: "sent", contactedAt: "2026-09-20" }).contactedAt, "2026-09-20", "ngày gửi kèm thì thắng hôm nay");
+  for (const bad of [{ status: "done" }, { contactedAt: "20/9/2026" }, { relation: "x" }, { name: "" }, { foo: 1 }]) {
+    let err = null;
+    try { P.patchPerson(db, a.id, bad); } catch (e) { err = e; }
+    eq(err?.status, 400, `${JSON.stringify(bad)} phải 400`);
+  }
+  const c = P.addPerson(db, { name: "Ce" });
+  const d = P.addPerson(db, { name: "De" });
+  P.patchPerson(db, d.id, { status: "referral", contactedAt: "2026-09-10" });
+  eq(P.listPeople(db).map((p) => p.name), ["Ce", "Anna Virtanen", "Bo", "De"], "todo → sent → referral; trong sent ngày mới trước (Bo 09-20 vs Anna không ngày → theo created)");
+  eq(P.countTodo(db), 1, "số todo");
+  eq(one(db, "SELECT COUNT(*) n FROM people").n, 4, "không ai biến mất");
+});
+
+check("week.js: tuần ISO qua ranh giới năm, thứ Hai của tuần, danh sách tuần mới nhất trước", () => {
+  eq([isoWeek("2026-10-05"), isoWeek("2026-10-04"), isoWeek("2026-01-01"), isoWeek("2024-12-30"), isoWeek("2021-01-03")],
+    ["2026-W41", "2026-W40", "2026-W01", "2025-W01", "2020-W53"], "isoWeek");
+  eq([weekStart("2026-10-05"), weekStart("2026-10-11"), weekStart("2026-01-01")], ["2026-10-05", "2026-10-05", "2025-12-29"], "weekStart");
+  eq(weeksBetween("2025-12-31", "2026-01-12").map((w) => w.week), ["2026-W03", "2026-W02", "2026-W01"], "weeksBetween");
+  eq(weeksBetween("2026-10-05", "2026-10-05"), [{ week: "2026-W41", start: "2026-10-05", end: "2026-10-11" }], "một tuần");
+});
+
+const ymdAgo = (days) => new Date(Date.now() - days * DAY).toLocaleDateString("sv-SE");
+const setEventAt = (db, jobId, where, iso) => db.prepare(`UPDATE events SET at = ? WHERE job_id = ? AND ${where}`).run(iso, jobId);
+
+check("weeklyProgress: tuần này trên cùng; đếm hồ sơ on-profile/chưa phân tích bước vào Đã nộp, bỏ off-profile, bỏ hoàn tác, nộp lại cùng tuần tính một; tin nhắn theo contacted_at; rep + prep_note từ weekly_log", () => {
+  const db = openDb(":memory:");
+  C.setSetting(db, "start_date", ymdAgo(15));
+  const applyAt = (title, fit, daysAgo = 0) => {
+    const j = add(db, title);
+    if (fit) J.setFit(db, j.id, { fit: { fit }, cvHash: "h" });
+    J.decide(db, j.id, "applied", null, { gut: 3 });
+    if (daysAgo) setEventAt(db, j.id, "to_status = 'applied'", new Date(Date.now() - daysAgo * DAY).toISOString());
+    return j;
+  };
+  applyAt("On", "on");
+  applyAt("Pending", null);
+  applyAt("Off", "off");                                  // không tính
+  const u = applyAt("Undone", "on"); J.undo(db);          // không tính
+  const twice = applyAt("Twice", "on"); J.decide(db, twice.id, "queue"); J.decide(db, twice.id, "applied", null, { gut: 2 }); // một
+  applyAt("Old", "on", 14);                               // hai tuần trước
+  const p = P.addPerson(db, { name: "A" }); P.patchPerson(db, p.id, { status: "sent" });
+  const q = P.addPerson(db, { name: "B" }); P.patchPerson(db, q.id, { status: "sent", contactedAt: ymdAgo(14) });
+  P.addPerson(db, { name: "C" });                         // todo, không có ngày
+  const today = ymdAgo(0);
+  eq(G.setWeeklyLog(db, isoWeek(today), { prep: 2, prepNote: " system design " }), { week: isoWeek(today), prep: 2, prepNote: "system design" }, "ghi weekly_log");
+  for (const [w, body] of [["2026-41", {}], [isoWeek(today), { prep: -1 }], [isoWeek(today), { prep: 1.5 }]]) {
+    let err = null;
+    try { G.setWeeklyLog(db, w, body); } catch (e) { err = e; }
+    eq(err?.status, 400, `${w} ${JSON.stringify(body)} phải 400`);
+  }
+  const weeks = G.weeklyProgress(db, today);
+  eq(weeks.length, weeksBetween(ymdAgo(15), today).length, "số tuần từ start_date tới hôm nay");
+  eq([weeks[0].week, weeks[0].current, weeks[1].current], [isoWeek(today), true, false], "tuần này trên cùng");
+  eq([weeks[0].apps, weeks[0].messages, weeks[0].prep, weeks[0].prepNote], [3, 1, 2, "system design"], "tuần này: On + Pending + Twice; A; rep 2");
+  const old = weeks.find((w) => w.week === isoWeek(ymdAgo(14)));
+  eq([old.apps, old.messages, old.prep, old.prepNote], [1, 1, null, ""], "hai tuần trước: Old; B; chưa nhập rep");
+  eq(weeks.filter((w) => w !== weeks[0] && w !== old).reduce((n, w) => n + w.apps + w.messages, 0), 0, "tuần khác trống");
+  eq(G.setWeeklyLog(db, isoWeek(today), { prep: null }).prep, null, "xóa trống rep");
+  ok(job(db, u.id).status !== "applied", "Undone đã rời applied");
+  invariants(db);
+});
+
+check("funnel: ack 3 ngày (mail đã Xác nhận hoặc đổi outcome), chỉ hồ sơ nộp ≥ 3 ngày; ngày tới từ chối; phỏng vấn / on-profile; off-profile không tính", () => {
+  const db = openDb(":memory:");
+  const mk = (title, company, daysAgo, fit = "on") => {
+    const j = add(db, title, company);
+    if (fit) J.setFit(db, j.id, { fit: { fit }, cvHash: "h" });
+    J.decide(db, j.id, "applied", null, { gut: 3 });
+    backdate(db, j.id, daysAgo, ["applied_at"]);
+    return j;
+  };
+  const a = mk("A", "Reaktor", 5);
+  J.decide(db, a.id, "applied", "rejected");
+  setEventAt(db, a.id, "to_outcome = 'rejected'", new Date(Date.now() - 3 * DAY).toISOString()); // 2 ngày sau khi nộp
+  mk("B", "Wolt", 5);                                                                               // im lặng
+  mk("C", "Wolt", 1);                                                                               // chưa đủ 3 ngày → ngoài pool
+  const d = mk("D", "Oura", 10);
+  R.storeMail(db, "oura", { messageId: "<m1>", from: "Oura", subject: "Thanks", date: new Date(Date.now() - 9 * DAY).toISOString(), text: "t" });
+  R.resolveReply(db, Number(R.addProposal(db, "oura", { jobId: d.id, status: "ack", evidence: "<m1>", note: "" })), "confirmed");
+  const d2 = mk("D2", "Oura", 10);                                                                   // mail có nhưng chưa Xác nhận → không tính
+  R.addProposal(db, "oura", { jobId: d2.id, status: "ack", evidence: "<m1>", note: "" });
+  const e = mk("E", "Nitor", 5);
+  J.decide(db, e.id, "applied", "interview");                                                       // 5 ngày sau → không phải ack 3 ngày, nhưng là phỏng vấn
+  mk("Off", "Nitor", 5, "off");                                                                     // không tính
+  const f = G.funnel(db);
+  eq(f, { total: 6, ackPool: 5, acked: 2, ackRate: 40, rejected: 1, daysToRejection: 2, interviewed: 1, interviewRate: 17 }, "funnel");
+  invariants(db);
+});
+
+check("journalEntries + gutTable: ghi chú mới nhất trước, bỏ event hoàn tác; bảng gut chỉ hiện từ 10 hồ sơ, lấy gut lần nộp gần nhất, tin rời applied không tính", () => {
+  const db = openDb(":memory:");
+  const a = add(db, "A");
+  J.decide(db, a.id, "applied", null, { gut: 2, note: "n1" });
+  J.decide(db, a.id, "applied", "interview", { note: "n2" });
+  J.decide(db, a.id, "applied", "offer", { note: "undone" }); J.undo(db);
+  const entries = G.journalEntries(db);
+  eq(entries.map((x) => [x.note, x.gut, x.toOutcome]), [["n2", null, "interview"], ["n1", 2, null]], "ghi chú");
+  eq([entries[0].job.title, entries[0].job.outcome], ["A", "interview"], "kèm tin");
+  ok(!("description" in entries[0].job), "không có mô tả công việc");
+  let g = G.gutTable(db);
+  eq([g.sample, g.rows, g.min], [1, null, 10], "dưới 10 → không có bảng");
+  for (let i = 0; i < 8; i++) {
+    const j = add(db, `B${i}`);
+    J.decide(db, j.id, "applied", null, { gut: (i % 5) + 1 });
+    if (i < 3) J.decide(db, j.id, "applied", "rejected");
+  }
+  // Nộp gut 1, rời, nộp lại gut 5 → tính gut 5. Một tin nộp rồi về Hàng đọc → không tính.
+  const r = add(db, "Re"); J.decide(db, r.id, "applied", null, { gut: 1 }); J.decide(db, r.id, "queue"); J.decide(db, r.id, "applied", null, { gut: 5 });
+  const left = add(db, "Left"); J.decide(db, left.id, "applied", null, { gut: 3 }); J.decide(db, left.id, "queue");
+  g = G.gutTable(db);
+  eq(g.sample, 10, "A + 8 B + Re");
+  eq(g.rows, [
+    { gut: 1, waiting: 1, interview: 0, rejected: 1 },   // B0 rejected, B5 waiting
+    { gut: 2, waiting: 1, interview: 1, rejected: 1 },   // A interview, B1 rejected, B6 waiting
+    { gut: 3, waiting: 1, interview: 0, rejected: 1 },   // B2 rejected, B7 waiting
+    { gut: 4, waiting: 1, interview: 0, rejected: 0 },   // B3
+    { gut: 5, waiting: 2, interview: 0, rejected: 0 },   // B4, Re
+  ], "bảng gut × kết quả");
+  const all = G.journal(db);
+  ok(all.weeks.length >= 1 && all.funnel.total === 10 && all.entries.length >= 2 && all.gut.sample === 10, "journal() gom đủ bốn phần");
   invariants(db);
 });
 

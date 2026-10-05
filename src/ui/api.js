@@ -33,6 +33,13 @@ export const api = {
   ingest: (source, items) => send("POST", "/api/ingest", { source, items }),
   decide: (id, status, outcome = null, extra = {}) => send("POST", `/api/jobs/${encodeURIComponent(id)}/status`, { status, outcome, ...extra }),
   killStats: () => send("GET", "/api/stats/kills?days=30"),
+  patchSettings: (patch) => send("PATCH", "/api/settings", patch),
+
+  people: () => send("GET", "/api/people"),
+  addPerson: (p) => send("POST", "/api/people", p),
+  patchPerson: (id, patch) => send("PATCH", `/api/people/${encodeURIComponent(id)}`, patch),
+  journal: () => send("GET", "/api/journal"),
+  setWeeklyLog: (week, body) => send("PUT", `/api/journal/${encodeURIComponent(week)}`, body),
   undo: () => send("POST", "/api/undo"),
   archiveStale: () => send("POST", "/api/archive-stale"),
 
