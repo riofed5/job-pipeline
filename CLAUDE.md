@@ -5,10 +5,10 @@ UI tham chiếu ở `reference/job-pipeline.jsx` — port từ đó, đừng thi
 
 ---
 
-## BƯỚC HIỆN TẠI: 5b — người quen và nhật ký
+## BƯỚC HIỆN TẠI: 5c — phát hiện trùng
 
-**Chỉ được làm:** bảng people, tab Người, tab Nhật ký (tiến độ input +
-ghi chú hồ sơ), bảng weekly_log, cột events.note và events.gut.
+**Chỉ được làm:** cột jobs.dup_candidate_of, hàm so mô tả, bước so
+trong enrich, dòng "Có thể trùng" ở Hàng đọc, phím 5 / nút Gộp.
 
 Những thứ **KHÔNG được đụng vào** ở bước này:
 
@@ -16,7 +16,7 @@ Những thứ **KHÔNG được đụng vào** ở bước này:
 - cron, scheduler, background job có timer
 - Docker, CI, deploy
 - CHECK của jobs.status — không nới, không DROP TABLE, không tắt FK
-- enrich.js, replies.js — không sửa
+- Không tự gộp tin dưới bất kỳ ngưỡng nào. Gộp là quyết định của người.
 
 Nếu thấy một trong số đó cần thiết, **nói ra và dừng lại**. Đừng tự làm.
 
